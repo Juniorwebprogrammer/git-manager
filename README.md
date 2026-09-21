@@ -1,17 +1,130 @@
-# git_manager
+<p align="center">
+  <img src="assets/icon/app_icon.png" width="120" alt="Git Manager icon" />
+</p>
 
-A new Flutter project.
+<h1 align="center">Git Manager</h1>
 
-## Getting Started
+<p align="center">
+  Switch between your GitHub accounts — personal, work, whatever — without touching the terminal.
+</p>
 
-This project is a starting point for a Flutter application.
+---
 
-A few resources to get you started if this is your first Flutter project:
+## Why
 
-- [Learn Flutter](https://docs.flutter.dev/get-started/learn-flutter)
-- [Write your first Flutter app](https://docs.flutter.dev/get-started/codelab)
-- [Flutter learning resources](https://docs.flutter.dev/reference/learning-resources)
+Switching git identities from the command line (SSH keys, `user.name`/`user.email`, HTTPS credentials) is fiddly and easy to get wrong. Git Manager is a small Linux desktop app that keeps multiple GitHub accounts on file, verifies each one against the GitHub API, and lets you switch your machine's active git identity with a single **Connect** click.
 
-For help getting started with Flutter development, view the
-[online documentation](https://docs.flutter.dev/), which offers tutorials,
-samples, guidance on mobile development, and a full API reference.
+## Features
+
+- **Add an account** with a GitHub Personal Access Token. The token is validated against the GitHub API (`GET /user`) before it's saved — a "ping" that confirms it actually works.
+- **Accounts list** as cards (avatar, name, `@login`); the currently active account is highlighted in green.
+- **Account detail** screen with profile info, a link to the GitHub profile, and the **Connect** / **Remove account** actions.
+- **Connect** switches your machine's active git identity in one step:
+  - Sets `git config --global user.name` / `user.email` to the selected account, so new commits are attributed correctly.
+  - Writes the account's token into `~/.git-credentials` via git's `credential.helper store`, so `git clone` / `push` / `pull` over HTTPS stop prompting for a username/password.
+- Tokens are stored **encrypted in the OS's native secure storage** (libsecret on Linux), never in plain text inside the app's own data.
+- Ships as an installable **.deb** package with a proper app icon, and a GUI **Uninstall Git Manager** entry — no terminal needed for install or removal.
+
+## Screens
+
+| Empty state | Accounts list | Account detail |
+|---|---|---|
+| First launch, no accounts yet — just an "Add account" button. | Cards for each account; the active one is tinted green. | Profile, "Connect", and "Remove account". |
+
+## How account switching actually works
+
+There are two independent things git cares about, and Connect updates both:
+
+1. **Commit authorship** — `user.name` / `user.email` in `~/.gitconfig`. This is what appears as the author of new commits.
+2. **HTTPS authentication** — the credentials git uses when you `clone`/`push`/`pull` over `https://github.com/...`. Git Manager manages this via git's built-in `credential.helper store`, which keeps a `~/.git-credentials` file. When you press Connect, any existing `github.com` line in that file is replaced with the active account's token.
+
+Both are **global** (machine-wide), matching how most people actually use two GitHub accounts on one laptop: one account active at a time, switched deliberately.
+
+### Token permissions
+
+When you generate a Personal Access Token at `github.com/settings/tokens`, make sure it has:
+
+- **`repo`** scope (classic token) — required for `clone`/`push`/`pull`, not just for reading your profile.
+- **`read:user`** and **`user:email`** — used to fetch your name, avatar, and email for the account card and commit identity.
+
+If you use a **fine-grained token** instead, make sure the repository (or "all repositories") is selected **and** that **Contents** is granted (Read, or Read and write if you plan to push). GitHub's fine-grained tokens separate "see this repo exists" (metadata, granted by default) from "read/write its contents" — missing the latter produces a confusing `403 Write access to repository not granted` error even on a plain `clone`.
+
+## Getting started (run from source)
+
+Requirements:
+
+- Flutter 3.x (stable channel) with Linux desktop enabled (`flutter config --enable-linux-desktop`).
+- Linux build toolchain: `clang`, `cmake`, `ninja-build`, `pkg-config`, `libgtk-3-dev`.
+- `libsecret-1-dev` and `libjsoncpp-dev` (needed to build the secure-storage plugin).
+
+```bash
+flutter pub get
+flutter run -d linux
+```
+
+## Building the installable package
+
+```bash
+./packaging/build_deb.sh
+sudo dpkg -i build/deb/git-manager_<version>_amd64.deb
+```
+
+This assembles the release build into `git-manager_<version>_amd64.deb`, which installs:
+
+- The app to `/opt/git-manager`, launched via `/usr/bin/git-manager`.
+- An application menu entry ("Git Manager") with the custom icon, installed into the `hicolor` icon theme at 16–512px.
+- An **"Uninstall Git Manager"** menu entry — no terminal required. It asks for confirmation, then uses a native password prompt (`pkexec`) to remove the package. Your saved accounts/tokens and git configuration are left untouched.
+
+Runtime dependencies (`libgtk-3-0`, `libsecret-1-0`, `git`, `polkitd`/`policykit-1`) are declared in the package and installed automatically by `apt`/`dpkg` if missing.
+
+## Architecture
+
+Clean Architecture, one feature module (`accounts`) split into three layers:
+
+```
+lib/
+  core/
+    di/            Riverpod provider wiring (composition root)
+    error/          Result<T> / AppFailure (domain-safe errors) and AppException (data-layer)
+    theme/          Material 3 theme
+    utils/          Avatar color/initials helper
+  features/accounts/
+    domain/
+      entities/     GitAccount — no token, no data-layer concerns
+      repositories/ AccountRepository interface
+      usecases/     One class per action: AddAccount, GetAccounts, ConnectAccount, RemoveAccount, TestConnection
+    data/
+      models/       GitAccountModel (carries the token), GitHubUserDto
+      datasources/  GitHubRemoteDataSource (API), AccountLocalDataSource (secure storage),
+                     GitConfigDataSource (user.name/email), GitCredentialsDataSource (~/.git-credentials)
+      repositories/ AccountRepositoryImpl — orchestrates the datasources, maps exceptions to failures
+    presentation/
+      state/        AccountsNotifier (Riverpod Notifier) + AccountsState
+      pages/         AccountsPage, AccountDetailPage
+      widgets/       AccountCard, AddAccountCard, AddAccountDialog, AccountAvatar
+```
+
+Key decisions:
+
+- The domain `GitAccount` entity never carries the token — only `GitAccountModel` (data layer) does. Presentation code never sees raw tokens.
+- `Result<T>` (`Success`/`Failure`) is used instead of throwing across layer boundaries; only the data layer catches `AppException`s and maps them to `AppFailure`s.
+- `GitConfigDataSource` and `GitCredentialsDataSource` accept an optional `environmentOverride` (a `HOME` override) so they can be tested against the real `git` binary without touching the developer's actual `~/.gitconfig` / `~/.git-credentials`.
+
+## Testing
+
+```bash
+flutter test
+```
+
+Covers:
+
+- Use cases (delegation to the repository).
+- `AccountRepositoryImpl`: token validation, duplicate accounts, and — importantly — that `connectAccount`/`removeAccount` correctly drive `GitConfigDataSource` and `GitCredentialsDataSource`.
+- `GitConfigDataSource` / `GitCredentialsDataSource`: exercised against the real `git` binary, scoped to a temporary `HOME` directory.
+- UI: empty state, add-account success/error, connect, remove (with confirmation), and the active-account green card styling.
+
+## Security notes
+
+- Tokens are stored encrypted via `flutter_secure_storage`, backed by `libsecret` (the same store used by GNOME Keyring/KWallet).
+- `~/.git-credentials` is git's own standard mechanism for HTTPS credentials — it stores the active token in **plain text**, protected only by file permissions (`600`), the same trust level as an SSH private key. This is what GitHub itself recommends for PAT-based HTTPS auth.
+- Uninstalling the app does **not** delete your saved accounts, `~/.gitconfig` identity, or `~/.git-credentials` — remove those manually if you want a full cleanup.

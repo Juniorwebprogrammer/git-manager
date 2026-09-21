@@ -1,0 +1,93 @@
+import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:flutter_test/flutter_test.dart';
+import 'package:mocktail/mocktail.dart';
+
+import 'package:git_manager/core/di/providers.dart';
+import 'package:git_manager/core/error/result.dart';
+import 'package:git_manager/features/accounts/domain/entities/git_account.dart';
+import 'package:git_manager/features/accounts/domain/repositories/account_repository.dart';
+import 'package:git_manager/features/accounts/presentation/pages/account_detail_page.dart';
+import 'package:git_manager/features/accounts/presentation/pages/accounts_page.dart';
+import 'package:git_manager/features/accounts/presentation/widgets/add_account_dialog.dart';
+
+class _MockAccountRepository extends Mock implements AccountRepository {}
+
+const _activeAccount = GitAccount(
+  id: '1',
+  login: 'personal',
+  displayName: 'Cuenta Personal',
+  email: 'personal@example.com',
+  avatarUrl: '',
+  profileUrl: '',
+  isActive: true,
+);
+
+const _otherAccount = GitAccount(
+  id: '2',
+  login: 'empresa',
+  displayName: 'Cuenta Empresa',
+  email: 'empresa@example.com',
+  avatarUrl: '',
+  profileUrl: '',
+);
+
+Future<void> _pumpAccountsPage(WidgetTester tester, AccountRepository repository) async {
+  await tester.pumpWidget(
+    ProviderScope(
+      overrides: [accountRepositoryProvider.overrideWithValue(repository)],
+      child: const MaterialApp(home: AccountsPage()),
+    ),
+  );
+  await tester.pumpAndSettle();
+}
+
+void main() {
+  late _MockAccountRepository repository;
+
+  setUp(() {
+    repository = _MockAccountRepository();
+  });
+
+  testWidgets('no muestra un FloatingActionButton (solo la tarjeta de añadir)', (tester) async {
+    when(() => repository.getAccounts())
+        .thenAnswer((_) async => const Success([_activeAccount, _otherAccount]));
+
+    await _pumpAccountsPage(tester, repository);
+
+    expect(find.byType(FloatingActionButton), findsNothing);
+  });
+
+  testWidgets('muestra una tarjeta por cuenta y la tarjeta de añadir al final', (tester) async {
+    when(() => repository.getAccounts())
+        .thenAnswer((_) async => const Success([_activeAccount, _otherAccount]));
+
+    await _pumpAccountsPage(tester, repository);
+
+    expect(find.text('Cuenta Personal'), findsOneWidget);
+    expect(find.text('Cuenta Empresa'), findsOneWidget);
+    expect(find.text('Añadir cuenta'), findsOneWidget);
+  });
+
+  testWidgets('tocar la tarjeta de añadir abre el diálogo de nueva cuenta', (tester) async {
+    when(() => repository.getAccounts())
+        .thenAnswer((_) async => const Success([_activeAccount]));
+
+    await _pumpAccountsPage(tester, repository);
+    await tester.tap(find.text('Añadir cuenta'));
+    await tester.pumpAndSettle();
+
+    expect(find.byType(AddAccountDialog), findsOneWidget);
+  });
+
+  testWidgets('tocar una tarjeta navega al detalle de esa cuenta', (tester) async {
+    when(() => repository.getAccounts())
+        .thenAnswer((_) async => const Success([_activeAccount]));
+
+    await _pumpAccountsPage(tester, repository);
+    await tester.tap(find.text('Cuenta Personal'));
+    await tester.pumpAndSettle();
+
+    expect(find.byType(AccountDetailPage), findsOneWidget);
+  });
+}

@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=Git Manager
+Comment=Cambia entre tus cuentas de GitHub sin tocar la terminal
+Exec=/usr/bin/git-manager
+Icon=git-manager
+Categories=Development;Utility;
+Terminal=false
+StartupWMClass=git_manager

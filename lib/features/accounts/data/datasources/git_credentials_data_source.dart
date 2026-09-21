@@ -6,7 +6,12 @@ import '../../../../core/error/app_exception.dart';
 /// `clone`/`push`/`pull` usen automáticamente el token de la cuenta activa,
 /// vía el credential helper `store` estándar de git.
 class GitCredentialsDataSource {
-  const GitCredentialsDataSource();
+  /// Permite fijar el entorno (típicamente `HOME`) con el que se invoca
+  /// `git` y se localiza `~/.git-credentials`, para poder testear esta
+  /// clase sin tocar los archivos reales del sistema.
+  final Map<String, String>? environmentOverride;
+
+  const GitCredentialsDataSource({this.environmentOverride});
 
   static const _host = 'github.com';
 
@@ -41,7 +46,7 @@ class GitCredentialsDataSource {
   }
 
   File _credentialsFile() {
-    final home = Platform.environment['HOME'];
+    final home = environmentOverride?['HOME'] ?? Platform.environment['HOME'];
     if (home == null || home.isEmpty) {
       throw const GitConfigException('No se pudo determinar el directorio HOME.');
     }
@@ -77,7 +82,7 @@ class GitCredentialsDataSource {
   Future<void> _run(List<String> arguments) async {
     final ProcessResult result;
     try {
-      result = await Process.run('git', arguments);
+      result = await Process.run('git', arguments, environment: environmentOverride);
     } catch (e) {
       throw GitConfigException('No se pudo ejecutar git: $e');
     }

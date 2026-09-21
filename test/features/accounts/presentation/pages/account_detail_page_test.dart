@@ -14,7 +14,7 @@ class _MockAccountRepository extends Mock implements AccountRepository {}
 const _account = GitAccount(
   id: '1',
   login: 'personal',
-  displayName: 'Cuenta Personal',
+  displayName: 'Personal Account',
   email: 'personal@example.com',
   avatarUrl: '',
   profileUrl: 'https://github.com/personal',
@@ -43,7 +43,7 @@ void main() {
         .thenAnswer((_) async => const Success([GitAccount(
               id: '1',
               login: 'personal',
-              displayName: 'Cuenta Personal',
+              displayName: 'Personal Account',
               email: 'personal@example.com',
               avatarUrl: '',
               profileUrl: '',
@@ -55,7 +55,7 @@ void main() {
     await tester.pumpAndSettle();
 
     verify(() => repository.connectAccount('1')).called(1);
-    expect(find.textContaining('Conectado como personal'), findsOneWidget);
+    expect(find.textContaining('Connected as personal'), findsOneWidget);
   });
 
   testWidgets('cuando la cuenta está activa el botón muestra "Conectada" y está deshabilitado',
@@ -65,7 +65,7 @@ void main() {
         GitAccount(
           id: '1',
           login: 'personal',
-          displayName: 'Cuenta Personal',
+          displayName: 'Personal Account',
           email: 'personal@example.com',
           avatarUrl: '',
           profileUrl: '',
@@ -77,7 +77,7 @@ void main() {
     await _pumpDetail(tester, repository);
 
     final button = tester.widget<FilledButton>(
-      find.widgetWithText(FilledButton, 'Conectada'),
+      find.widgetWithText(FilledButton, 'Connected'),
     );
     expect(button.onPressed, isNull);
   });
@@ -89,12 +89,14 @@ void main() {
     when(() => repository.removeAccount('1')).thenAnswer((_) async => const Success([]));
 
     await _pumpDetail(tester, repository);
-    await tester.tap(find.widgetWithText(TextButton, 'Eliminar cuenta'));
+    final removeButtonFinder = find.widgetWithText(TextButton, 'Remove account');
+    await tester.ensureVisible(removeButtonFinder);
+    await tester.tap(removeButtonFinder);
     await tester.pumpAndSettle();
 
-    expect(find.text('Se eliminará "Cuenta Personal" y su token guardado.'), findsOneWidget);
+    expect(find.text('"Personal Account" and its saved token will be removed.'), findsOneWidget);
 
-    await tester.tap(find.widgetWithText(FilledButton, 'Eliminar'));
+    await tester.tap(find.widgetWithText(FilledButton, 'Remove'));
     await tester.pumpAndSettle();
 
     verify(() => repository.removeAccount('1')).called(1);

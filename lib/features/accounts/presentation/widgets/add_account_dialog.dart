@@ -26,7 +26,7 @@ class _AddAccountDialogState extends ConsumerState<AddAccountDialog> {
   Future<void> _submit() async {
     final token = _tokenController.text.trim();
     if (token.isEmpty) {
-      setState(() => _errorMessage = 'Introduce un token de acceso personal.');
+      setState(() => _errorMessage = 'Enter a personal access token.');
       return;
     }
 
@@ -43,7 +43,7 @@ class _AddAccountDialogState extends ConsumerState<AddAccountDialog> {
       case Success(:final value):
         Navigator.of(context).pop();
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Cuenta añadida: ${value.login}')),
+          SnackBar(content: Text('Account added: ${value.login}')),
         );
       case Failure(:final failure):
         setState(() {
@@ -56,7 +56,7 @@ class _AddAccountDialogState extends ConsumerState<AddAccountDialog> {
   @override
   Widget build(BuildContext context) {
     return AlertDialog(
-      title: const Text('Añadir cuenta de GitHub'),
+      title: const Text('Add GitHub account'),
       content: SizedBox(
         width: 420,
         child: Column(
@@ -64,11 +64,11 @@ class _AddAccountDialogState extends ConsumerState<AddAccountDialog> {
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             Text(
-              'Genera un token en github.com/settings/tokens con scope '
-              '"repo" (para clonar/hacer push) y "read:user" + "user:email" '
-              '(para el perfil). Se guarda cifrado en el almacén seguro del '
-              'sistema; al pulsar Connect también se usa para autenticar '
-              'git por HTTPS.',
+              'Generate a token at github.com/settings/tokens with the '
+              '"repo" scope (to clone/push) and "read:user" + "user:email" '
+              '(for the profile). It is stored encrypted in the system\'s '
+              'secure storage; pressing Connect also uses it to '
+              'authenticate git over HTTPS.',
               style: Theme.of(context).textTheme.bodySmall,
             ),
             const SizedBox(height: 16),
@@ -93,7 +93,7 @@ class _AddAccountDialogState extends ConsumerState<AddAccountDialog> {
       actions: [
         TextButton(
           onPressed: _isSubmitting ? null : () => Navigator.of(context).pop(),
-          child: const Text('Cancelar'),
+          child: const Text('Cancel'),
         ),
         FilledButton.icon(
           onPressed: _isSubmitting ? null : _submit,
@@ -104,7 +104,7 @@ class _AddAccountDialogState extends ConsumerState<AddAccountDialog> {
                   child: CircularProgressIndicator(strokeWidth: 2),
                 )
               : const Icon(Icons.wifi_tethering),
-          label: Text(_isSubmitting ? 'Comprobando...' : 'Probar y añadir'),
+          label: Text(_isSubmitting ? 'Checking...' : 'Test & add'),
         ),
       ],
     );

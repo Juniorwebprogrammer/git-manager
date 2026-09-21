@@ -48,7 +48,7 @@ class GitCredentialsDataSource {
   File _credentialsFile() {
     final home = environmentOverride?['HOME'] ?? Platform.environment['HOME'];
     if (home == null || home.isEmpty) {
-      throw const GitConfigException('No se pudo determinar el directorio HOME.');
+      throw const GitConfigException('Could not determine the HOME directory.');
     }
     return File('$home/.git-credentials');
   }
@@ -58,7 +58,7 @@ class GitCredentialsDataSource {
       if (!await file.exists()) return [];
       return await file.readAsLines();
     } catch (e) {
-      throw GitConfigException('No se pudo leer ~/.git-credentials: $e');
+      throw GitConfigException('Could not read ~/.git-credentials: $e');
     }
   }
 
@@ -69,7 +69,7 @@ class GitCredentialsDataSource {
         await Process.run('chmod', ['600', file.path]);
       }
     } catch (e) {
-      throw GitConfigException('No se pudo escribir ~/.git-credentials: $e');
+      throw GitConfigException('Could not write ~/.git-credentials: $e');
     }
   }
 
@@ -84,11 +84,11 @@ class GitCredentialsDataSource {
     try {
       result = await Process.run('git', arguments, environment: environmentOverride);
     } catch (e) {
-      throw GitConfigException('No se pudo ejecutar git: $e');
+      throw GitConfigException('Could not run git: $e');
     }
     if (result.exitCode != 0) {
       throw GitConfigException(
-        'git ${arguments.join(' ')} falló: ${result.stderr}',
+        'git ${arguments.join(' ')} failed: ${result.stderr}',
       );
     }
   }

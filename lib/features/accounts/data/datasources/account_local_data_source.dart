@@ -24,7 +24,7 @@ class AccountLocalDataSource {
           .map((e) => GitAccountModel.fromJson(e as Map<String, dynamic>))
           .toList();
     } catch (e) {
-      throw StorageException('No se pudieron leer las cuentas guardadas: $e');
+      throw StorageException('Could not read the saved accounts: $e');
     }
   }
 
@@ -33,7 +33,7 @@ class AccountLocalDataSource {
       final raw = jsonEncode(accounts.map((a) => a.toJson()).toList());
       await _storage.write(key: _accountsKey, value: raw);
     } catch (e) {
-      throw StorageException('No se pudieron guardar las cuentas: $e');
+      throw StorageException('Could not save the accounts: $e');
     }
   }
 }

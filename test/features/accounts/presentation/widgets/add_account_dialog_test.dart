@@ -35,14 +35,14 @@ Future<void> _pumpDialog(WidgetTester tester, AccountRepository repository) asyn
                 context: context,
                 builder: (_) => const AddAccountDialog(),
               ),
-              child: const Text('abrir'),
+              child: const Text('open'),
             ),
           ),
         ),
       ),
     ),
   );
-  await tester.tap(find.text('abrir'));
+  await tester.tap(find.text('open'));
   await tester.pumpAndSettle();
 }
 
@@ -60,11 +60,11 @@ void main() {
     await _pumpDialog(tester, repository);
 
     await tester.enterText(find.byType(TextField), 'tok_123');
-    await tester.tap(find.widgetWithText(FilledButton, 'Probar y añadir'));
+    await tester.tap(find.widgetWithText(FilledButton, 'Test & add'));
     await tester.pumpAndSettle();
 
     expect(find.byType(AddAccountDialog), findsNothing);
-    expect(find.textContaining('Cuenta añadida: octocat'), findsOneWidget);
+    expect(find.textContaining('Account added: octocat'), findsOneWidget);
   });
 
   testWidgets('con token inválido muestra el error y deja el diálogo abierto', (tester) async {
@@ -74,20 +74,20 @@ void main() {
     await _pumpDialog(tester, repository);
 
     await tester.enterText(find.byType(TextField), 'tok_malo');
-    await tester.tap(find.widgetWithText(FilledButton, 'Probar y añadir'));
+    await tester.tap(find.widgetWithText(FilledButton, 'Test & add'));
     await tester.pumpAndSettle();
 
     expect(find.byType(AddAccountDialog), findsOneWidget);
-    expect(find.text('El token no es válido o no tiene permisos suficientes.'), findsOneWidget);
+    expect(find.text('The token is invalid or does not have enough permissions.'), findsOneWidget);
   });
 
   testWidgets('no permite enviar el formulario vacío', (tester) async {
     await _pumpDialog(tester, repository);
 
-    await tester.tap(find.widgetWithText(FilledButton, 'Probar y añadir'));
+    await tester.tap(find.widgetWithText(FilledButton, 'Test & add'));
     await tester.pumpAndSettle();
 
-    expect(find.text('Introduce un token de acceso personal.'), findsOneWidget);
+    expect(find.text('Enter a personal access token.'), findsOneWidget);
     verifyNever(() => repository.addAccount(any()));
   });
 }

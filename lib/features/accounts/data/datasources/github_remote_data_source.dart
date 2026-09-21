@@ -67,15 +67,15 @@ class GitHubRemoteDataSource {
           .get(Uri.parse('$_baseUrl$path'), headers: _headers(token))
           .timeout(const Duration(seconds: 15));
     } on SocketException catch (_) {
-      throw const ServerException('No hay conexión a internet.');
+      throw const ServerException('No internet connection.');
     } on HttpException catch (_) {
-      throw const ServerException('No se pudo contactar con GitHub.');
+      throw const ServerException('Could not reach GitHub.');
     }
 
     if (response.statusCode == 200) return response;
     if (response.statusCode == 401 || response.statusCode == 403) {
       throw const InvalidTokenException();
     }
-    throw ServerException('GitHub respondió con el código ${response.statusCode}.');
+    throw ServerException('GitHub responded with status code ${response.statusCode}.');
   }
 }

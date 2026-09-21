@@ -15,19 +15,19 @@ class AccountDetailPage extends ConsumerWidget {
     final confirmed = await showDialog<bool>(
       context: context,
       builder: (context) => AlertDialog(
-        title: const Text('Eliminar cuenta'),
-        content: Text('Se eliminará "${account.nameOrLogin}" y su token guardado.'),
+        title: const Text('Remove account'),
+        content: Text('"${account.nameOrLogin}" and its saved token will be removed.'),
         actions: [
           TextButton(
             onPressed: () => Navigator.of(context).pop(false),
-            child: const Text('Cancelar'),
+            child: const Text('Cancel'),
           ),
           FilledButton.tonal(
             onPressed: () => Navigator.of(context).pop(true),
             style: FilledButton.styleFrom(
               foregroundColor: Theme.of(context).colorScheme.error,
             ),
-            child: const Text('Eliminar'),
+            child: const Text('Remove'),
           ),
         ],
       ),
@@ -54,8 +54,8 @@ class AccountDetailPage extends ConsumerWidget {
       messenger.showSnackBar(
         SnackBar(
           content: Text(
-            'Conectado como ${account.login}. Identidad y credenciales '
-            'HTTPS de git actualizadas.',
+            'Connected as ${account.login}. Git identity and HTTPS '
+            'credentials updated.',
           ),
         ),
       );
@@ -72,7 +72,7 @@ class AccountDetailPage extends ConsumerWidget {
     if (account == null) {
       return Scaffold(
         appBar: AppBar(),
-        body: const Center(child: Text('Esta cuenta ya no existe.')),
+        body: const Center(child: Text('This account no longer exists.')),
       );
     }
 
@@ -108,7 +108,7 @@ class AccountDetailPage extends ConsumerWidget {
                       ),
                       ListTile(
                         leading: const Icon(Icons.open_in_new),
-                        title: const Text('Perfil en GitHub'),
+                        title: const Text('GitHub profile'),
                         subtitle: Text(account.profileUrl),
                         onTap: account.profileUrl.isEmpty
                             ? null
@@ -124,7 +124,7 @@ class AccountDetailPage extends ConsumerWidget {
                       ? FilledButton.icon(
                           onPressed: null,
                           icon: const Icon(Icons.check_circle),
-                          label: const Text('Conectada'),
+                          label: const Text('Connected'),
                         )
                       : FilledButton.icon(
                           onPressed: state.isLoading ? null : () => _connect(context, ref, account),
@@ -139,7 +139,7 @@ class AccountDetailPage extends ConsumerWidget {
                     onPressed: () => _confirmRemove(context, ref, account),
                     style: TextButton.styleFrom(foregroundColor: theme.colorScheme.error),
                     icon: const Icon(Icons.delete_outline),
-                    label: const Text('Eliminar cuenta'),
+                    label: const Text('Remove account'),
                   ),
                 ),
               ],

@@ -1,4 +1,4 @@
-/// Fallos de dominio que puede producir cualquier caso de uso de la app.
+/// Domain failures that any use case in the app can produce.
 sealed class AppFailure {
   final String message;
 
@@ -7,20 +7,20 @@ sealed class AppFailure {
 
 class InvalidTokenFailure extends AppFailure {
   const InvalidTokenFailure()
-      : super('El token no es válido o no tiene permisos suficientes.');
+      : super('The token is invalid or does not have enough permissions.');
 }
 
 class AccountAlreadyExistsFailure extends AppFailure {
   const AccountAlreadyExistsFailure(String login)
-      : super('La cuenta "$login" ya está añadida.');
+      : super('The "$login" account has already been added.');
 }
 
 class AccountNotFoundFailure extends AppFailure {
-  const AccountNotFoundFailure() : super('No se encontró la cuenta solicitada.');
+  const AccountNotFoundFailure() : super('The requested account was not found.');
 }
 
 class NetworkFailure extends AppFailure {
-  const NetworkFailure([super.message = 'No se pudo conectar con GitHub.']);
+  const NetworkFailure([super.message = 'Could not connect to GitHub.']);
 }
 
 class StorageFailure extends AppFailure {
@@ -32,5 +32,5 @@ class GitConfigFailure extends AppFailure {
 }
 
 class UnknownFailure extends AppFailure {
-  const UnknownFailure([super.message = 'Ha ocurrido un error inesperado.']);
+  const UnknownFailure([super.message = 'An unexpected error occurred.']);
 }

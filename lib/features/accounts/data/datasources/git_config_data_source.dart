@@ -26,11 +26,11 @@ class GitConfigDataSource {
     try {
       result = await Process.run('git', arguments, environment: environmentOverride);
     } catch (e) {
-      throw GitConfigException('No se pudo ejecutar git: $e');
+      throw GitConfigException('Could not run git: $e');
     }
     if (result.exitCode != 0) {
       throw GitConfigException(
-        'git ${arguments.join(' ')} falló: ${result.stderr}',
+        'git ${arguments.join(' ')} failed: ${result.stderr}',
       );
     }
   }

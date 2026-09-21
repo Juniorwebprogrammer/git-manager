@@ -36,8 +36,8 @@ void main() {
     final card = tester.widget<Card>(find.byType(Card));
     expect(card.color, isNotNull);
     expect(find.byIcon(Icons.check_circle), findsOneWidget);
-    // Ya no se usa el chip "Conectada" en banner.
-    expect(find.text('Conectada'), findsNothing);
+    // No longer using a "Connected" banner chip.
+    expect(find.text('Connected'), findsNothing);
   });
 
   testWidgets('el tap invoca el callback', (tester) async {

@@ -23,10 +23,10 @@ class AccountsPage extends ConsumerWidget {
 
     return Scaffold(
       appBar: AppBar(
-        title: const Text('Cuentas de GitHub'),
+        title: const Text('GitHub Accounts'),
         actions: [
           IconButton(
-            tooltip: 'Actualizar',
+            tooltip: 'Refresh',
             onPressed: () => ref.read(accountsNotifierProvider.notifier).load(),
             icon: const Icon(Icons.refresh),
           ),
@@ -90,10 +90,10 @@ class _EmptyState extends StatelessWidget {
         children: [
           Icon(Icons.hub_outlined, size: 72, color: theme.colorScheme.outline),
           const SizedBox(height: 16),
-          Text('Aún no has añadido ninguna cuenta', style: theme.textTheme.titleMedium),
+          Text("You haven't added any accounts yet", style: theme.textTheme.titleMedium),
           const SizedBox(height: 8),
           Text(
-            'Añade tu cuenta personal y la de empresa para\ncambiar entre ellas en un clic.',
+            'Add your personal and work accounts to\nswitch between them in one click.',
             textAlign: TextAlign.center,
             style: theme.textTheme.bodyMedium?.copyWith(
               color: theme.colorScheme.onSurfaceVariant,
@@ -103,7 +103,7 @@ class _EmptyState extends StatelessWidget {
           FilledButton.icon(
             onPressed: onAdd,
             icon: const Icon(Icons.add),
-            label: const Text('Añadir cuenta'),
+            label: const Text('Add account'),
           ),
         ],
       ),

@@ -47,11 +47,11 @@ Priority: optional
 Architecture: $ARCH
 Depends: libgtk-3-0, libsecret-1-0, git
 Maintainer: Junior Garcia <junior.sacarias.garcia.diaz@volenday.com>
-Description: Gestor de cuentas de GitHub para cambiar de identidad git en un clic
- Git Manager es una app de escritorio para anadir varias cuentas de
- GitHub, verificarlas contra la API y cambiar la identidad global de git
- (user.name, user.email y credenciales HTTPS) entre ellas sin usar la
- linea de comandos.
+Description: GitHub account manager to switch your git identity in one click
+ Git Manager is a desktop app to add multiple GitHub accounts, verify
+ them against the API, and switch the global git identity (user.name,
+ user.email and HTTPS credentials) between them without using the
+ command line.
 EOF
 
 find "$STAGE_DIR" -type d -exec chmod 755 {} \;

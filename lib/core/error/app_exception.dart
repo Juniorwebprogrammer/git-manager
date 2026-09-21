@@ -1,5 +1,5 @@
-/// Excepciones internas de la capa de datos, capturadas y traducidas
-/// a [AppFailure] por los repositorios.
+/// Internal data-layer exceptions, caught and translated into
+/// [AppFailure] by the repositories.
 sealed class AppException implements Exception {
   final String message;
 
@@ -7,7 +7,7 @@ sealed class AppException implements Exception {
 }
 
 class InvalidTokenException extends AppException {
-  const InvalidTokenException() : super('Token inválido o sin permisos.');
+  const InvalidTokenException() : super('Invalid or insufficiently scoped token.');
 }
 
 class ServerException extends AppException {
@@ -23,5 +23,5 @@ class GitConfigException extends AppException {
 }
 
 class AccountNotFoundException extends AppException {
-  const AccountNotFoundException() : super('Cuenta no encontrada.');
+  const AccountNotFoundException() : super('Account not found.');
 }

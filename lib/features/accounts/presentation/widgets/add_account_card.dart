@@ -29,7 +29,7 @@ class AddAccountCard extends StatelessWidget {
               Icon(Icons.add_circle_outline, size: 32, color: theme.colorScheme.primary),
               const SizedBox(height: 8),
               Text(
-                'Añadir cuenta',
+                'Add account',
                 style: theme.textTheme.titleSmall?.copyWith(
                   color: theme.colorScheme.primary,
                 ),

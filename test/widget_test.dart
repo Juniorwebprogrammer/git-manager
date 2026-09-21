@@ -30,7 +30,7 @@ class _FakeAccountRepository implements AccountRepository {
 }
 
 void main() {
-  testWidgets('Muestra el estado vacío cuando no hay cuentas añadidas', (
+  testWidgets('Shows the empty state when there are no accounts yet', (
     WidgetTester tester,
   ) async {
     await tester.pumpWidget(
@@ -43,7 +43,7 @@ void main() {
     );
     await tester.pumpAndSettle();
 
-    expect(find.text('Aún no has añadido ninguna cuenta'), findsOneWidget);
-    expect(find.widgetWithText(FilledButton, 'Añadir cuenta'), findsOneWidget);
+    expect(find.text("You haven't added any accounts yet"), findsOneWidget);
+    expect(find.widgetWithText(FilledButton, 'Add account'), findsOneWidget);
   });
 }

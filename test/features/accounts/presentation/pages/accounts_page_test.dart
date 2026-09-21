@@ -16,7 +16,7 @@ class _MockAccountRepository extends Mock implements AccountRepository {}
 const _activeAccount = GitAccount(
   id: '1',
   login: 'personal',
-  displayName: 'Cuenta Personal',
+  displayName: 'Personal Account',
   email: 'personal@example.com',
   avatarUrl: '',
   profileUrl: '',
@@ -26,7 +26,7 @@ const _activeAccount = GitAccount(
 const _otherAccount = GitAccount(
   id: '2',
   login: 'empresa',
-  displayName: 'Cuenta Empresa',
+  displayName: 'Work Account',
   email: 'empresa@example.com',
   avatarUrl: '',
   profileUrl: '',
@@ -64,9 +64,9 @@ void main() {
 
     await _pumpAccountsPage(tester, repository);
 
-    expect(find.text('Cuenta Personal'), findsOneWidget);
-    expect(find.text('Cuenta Empresa'), findsOneWidget);
-    expect(find.text('Añadir cuenta'), findsOneWidget);
+    expect(find.text('Personal Account'), findsOneWidget);
+    expect(find.text('Work Account'), findsOneWidget);
+    expect(find.text('Add account'), findsOneWidget);
   });
 
   testWidgets('tocar la tarjeta de añadir abre el diálogo de nueva cuenta', (tester) async {
@@ -74,7 +74,7 @@ void main() {
         .thenAnswer((_) async => const Success([_activeAccount]));
 
     await _pumpAccountsPage(tester, repository);
-    await tester.tap(find.text('Añadir cuenta'));
+    await tester.tap(find.text('Add account'));
     await tester.pumpAndSettle();
 
     expect(find.byType(AddAccountDialog), findsOneWidget);
@@ -85,7 +85,7 @@ void main() {
         .thenAnswer((_) async => const Success([_activeAccount]));
 
     await _pumpAccountsPage(tester, repository);
-    await tester.tap(find.text('Cuenta Personal'));
+    await tester.tap(find.text('Personal Account'));
     await tester.pumpAndSettle();
 
     expect(find.byType(AccountDetailPage), findsOneWidget);

@@ -5,6 +5,7 @@ import '../../domain/entities/git_account.dart';
 import '../../domain/repositories/account_repository.dart';
 import '../datasources/account_local_data_source.dart';
 import '../datasources/git_config_data_source.dart';
+import '../datasources/git_credentials_data_source.dart';
 import '../datasources/github_remote_data_source.dart';
 import '../models/git_account_model.dart';
 
@@ -12,14 +13,17 @@ class AccountRepositoryImpl implements AccountRepository {
   final GitHubRemoteDataSource _remote;
   final AccountLocalDataSource _local;
   final GitConfigDataSource _gitConfig;
+  final GitCredentialsDataSource _gitCredentials;
 
   const AccountRepositoryImpl({
     required GitHubRemoteDataSource remote,
     required AccountLocalDataSource local,
     required GitConfigDataSource gitConfig,
+    required GitCredentialsDataSource gitCredentials,
   }) : _remote = remote,
        _local = local,
-       _gitConfig = gitConfig;
+       _gitConfig = gitConfig,
+       _gitCredentials = gitCredentials;
 
   @override
   Future<Result<List<GitAccount>>> getAccounts() async {
@@ -100,6 +104,10 @@ class AccountRepositoryImpl implements AccountRepository {
         name: target.displayName.isNotEmpty ? target.displayName : target.login,
         email: target.email,
       );
+      await _gitCredentials.setActiveCredential(
+        login: target.login,
+        token: target.token,
+      );
 
       final updated = accounts
           .map((a) => a.copyWith(isActive: a.id == accountId))
@@ -117,8 +125,14 @@ class AccountRepositoryImpl implements AccountRepository {
   Future<Result<List<GitAccount>>> removeAccount(String accountId) async {
     try {
       final accounts = await _local.readAccounts();
+      final removed = accounts.where((a) => a.id == accountId).firstOrNull;
       final updated = accounts.where((a) => a.id != accountId).toList();
       await _local.writeAccounts(updated);
+
+      if (removed?.isActive ?? false) {
+        await _gitCredentials.clearActiveCredential();
+      }
+
       return Success(updated.map((a) => a.toEntity()).toList());
     } on AppException catch (e) {
       return Failure(_mapException(e));

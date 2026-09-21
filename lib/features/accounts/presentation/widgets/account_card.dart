@@ -12,9 +12,19 @@ class AccountCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
+    final isDark = theme.brightness == Brightness.dark;
+    final connectedColor = isDark ? Colors.green.shade900 : Colors.green.shade50;
+    final connectedBorder = isDark ? Colors.green.shade400 : Colors.green.shade400;
 
     return Card(
       clipBehavior: Clip.antiAlias,
+      color: account.isActive ? connectedColor : null,
+      shape: account.isActive
+          ? RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(12),
+              side: BorderSide(color: connectedBorder, width: 1.5),
+            )
+          : null,
       child: InkWell(
         onTap: onTap,
         child: Padding(
@@ -22,33 +32,29 @@ class AccountCard extends StatelessWidget {
           child: Column(
             mainAxisAlignment: MainAxisAlignment.center,
             children: [
-              Align(
-                alignment: Alignment.topRight,
-                child: SizedBox(
-                  height: 24,
-                  child: account.isActive
-                      ? Chip(
-                          visualDensity: VisualDensity.compact,
-                          padding: EdgeInsets.zero,
-                          labelPadding: const EdgeInsets.symmetric(horizontal: 8),
-                          backgroundColor: theme.colorScheme.primaryContainer,
-                          avatar: Icon(
-                            Icons.check_circle,
-                            size: 14,
-                            color: theme.colorScheme.onPrimaryContainer,
-                          ),
-                          label: Text(
-                            'Conectada',
-                            style: TextStyle(
-                              fontSize: 11,
-                              color: theme.colorScheme.onPrimaryContainer,
-                            ),
-                          ),
-                        )
-                      : const SizedBox.shrink(),
-                ),
+              Stack(
+                clipBehavior: Clip.none,
+                children: [
+                  AccountAvatar(account: account, radius: 32),
+                  if (account.isActive)
+                    Positioned(
+                      bottom: -2,
+                      right: -2,
+                      child: Container(
+                        padding: const EdgeInsets.all(2),
+                        decoration: BoxDecoration(
+                          color: theme.colorScheme.surface,
+                          shape: BoxShape.circle,
+                        ),
+                        child: Icon(
+                          Icons.check_circle,
+                          size: 18,
+                          color: Colors.green.shade600,
+                        ),
+                      ),
+                    ),
+                ],
               ),
-              AccountAvatar(account: account, radius: 32),
               const SizedBox(height: 12),
               Text(
                 account.nameOrLogin,

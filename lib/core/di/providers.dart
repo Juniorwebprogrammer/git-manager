@@ -4,6 +4,7 @@ import 'package:http/http.dart' as http;
 
 import '../../features/accounts/data/datasources/account_local_data_source.dart';
 import '../../features/accounts/data/datasources/git_config_data_source.dart';
+import '../../features/accounts/data/datasources/git_credentials_data_source.dart';
 import '../../features/accounts/data/datasources/github_remote_data_source.dart';
 import '../../features/accounts/data/repositories/account_repository_impl.dart';
 import '../../features/accounts/domain/repositories/account_repository.dart';
@@ -35,11 +36,16 @@ final gitConfigDataSourceProvider = Provider<GitConfigDataSource>((ref) {
   return const GitConfigDataSource();
 });
 
+final gitCredentialsDataSourceProvider = Provider<GitCredentialsDataSource>((ref) {
+  return const GitCredentialsDataSource();
+});
+
 final accountRepositoryProvider = Provider<AccountRepository>((ref) {
   return AccountRepositoryImpl(
     remote: ref.watch(gitHubRemoteDataSourceProvider),
     local: ref.watch(accountLocalDataSourceProvider),
     gitConfig: ref.watch(gitConfigDataSourceProvider),
+    gitCredentials: ref.watch(gitCredentialsDataSourceProvider),
   );
 });
 

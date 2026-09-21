@@ -52,7 +52,12 @@ class AccountDetailPage extends ConsumerWidget {
     final messenger = ScaffoldMessenger.of(context);
     if (error == null) {
       messenger.showSnackBar(
-        SnackBar(content: Text('Conectado como ${account.login}. git config global actualizado.')),
+        SnackBar(
+          content: Text(
+            'Conectado como ${account.login}. Identidad y credenciales '
+            'HTTPS de git actualizadas.',
+          ),
+        ),
       );
     } else {
       messenger.showSnackBar(SnackBar(content: Text(error.message)));

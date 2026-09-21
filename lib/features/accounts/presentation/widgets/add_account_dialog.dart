@@ -64,10 +64,11 @@ class _AddAccountDialogState extends ConsumerState<AddAccountDialog> {
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             Text(
-              'Genera un token en github.com/settings/tokens (scope '
-              '"read:user", y "user:email" si tu correo es privado) y '
-              'pégalo aquí. Se guarda cifrado en el almacén seguro del '
-              'sistema.',
+              'Genera un token en github.com/settings/tokens con scope '
+              '"repo" (para clonar/hacer push) y "read:user" + "user:email" '
+              '(para el perfil). Se guarda cifrado en el almacén seguro del '
+              'sistema; al pulsar Connect también se usa para autenticar '
+              'git por HTTPS.',
               style: Theme.of(context).textTheme.bodySmall,
             ),
             const SizedBox(height: 16),

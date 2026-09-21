@@ -32,13 +32,6 @@ class AccountsPage extends ConsumerWidget {
           ),
         ],
       ),
-      floatingActionButton: state.hasAccounts
-          ? FloatingActionButton.extended(
-              onPressed: () => _openAddAccountDialog(context),
-              icon: const Icon(Icons.add),
-              label: const Text('Añadir cuenta'),
-            )
-          : null,
       body: Builder(
         builder: (context) {
           if (state.isLoading && !state.hasAccounts) {

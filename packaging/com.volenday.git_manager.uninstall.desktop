@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=Uninstall Git Manager
+Comment=Remove Git Manager from this computer
+Exec=/opt/git-manager/uninstall.sh
+Icon=git-manager
+Categories=Development;Utility;
+Terminal=false

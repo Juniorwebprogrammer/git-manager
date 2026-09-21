@@ -38,7 +38,12 @@ exec /opt/git-manager/git_manager "$@"
 EOF
 chmod 755 "$STAGE_DIR/usr/bin/git-manager"
 
+cp packaging/uninstall.sh "$STAGE_DIR/opt/$PKG_NAME/uninstall.sh"
+chmod 755 "$STAGE_DIR/opt/$PKG_NAME/uninstall.sh"
+
 cp "packaging/${DESKTOP_ID}.desktop" "$STAGE_DIR/usr/share/applications/${DESKTOP_ID}.desktop"
+cp "packaging/${DESKTOP_ID}.uninstall.desktop" \
+  "$STAGE_DIR/usr/share/applications/${DESKTOP_ID}.uninstall.desktop"
 
 for size in 16 32 48 64 128 192 256 512; do
   icon_dir="$STAGE_DIR/usr/share/icons/hicolor/${size}x${size}/apps"
@@ -52,13 +57,15 @@ Version: $VERSION
 Section: devel
 Priority: optional
 Architecture: $ARCH
-Depends: libgtk-3-0, libsecret-1-0, git
+Depends: libgtk-3-0, libsecret-1-0, git, polkitd | policykit-1
+Recommends: zenity, libnotify-bin
 Maintainer: Junior Garcia <junior.sacarias.garcia.diaz@volenday.com>
 Description: GitHub account manager to switch your git identity in one click
  Git Manager is a desktop app to add multiple GitHub accounts, verify
  them against the API, and switch the global git identity (user.name,
  user.email and HTTPS credentials) between them without using the
- command line.
+ command line. Includes an "Uninstall Git Manager" menu entry to
+ remove it without a terminal.
 EOF
 
 cat > "$STAGE_DIR/DEBIAN/postinst" <<'EOF'

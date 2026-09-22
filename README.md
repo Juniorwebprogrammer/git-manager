@@ -12,7 +12,7 @@
 
 ## Why
 
-Switching git identities from the command line (SSH keys, `user.name`/`user.email`, HTTPS credentials) is fiddly and easy to get wrong. Git Manager is a small Linux desktop app that keeps multiple GitHub accounts on file, verifies each one against the GitHub API, and lets you switch your machine's active git identity with a single **Connect** click.
+Switching git identities from the command line (SSH keys, `user.name`/`user.email`, HTTPS credentials) is fiddly and easy to get wrong. Git Manager is a small Linux/Windows desktop app that keeps multiple GitHub accounts on file, verifies each one against the GitHub API, and lets you switch your machine's active git identity with a single **Connect** click.
 
 ## Features
 
@@ -22,8 +22,8 @@ Switching git identities from the command line (SSH keys, `user.name`/`user.emai
 - **Connect** switches your machine's active git identity in one step:
   - Sets `git config --global user.name` / `user.email` to the selected account, so new commits are attributed correctly.
   - Writes the account's token into `~/.git-credentials` via git's `credential.helper store`, so `git clone` / `push` / `pull` over HTTPS stop prompting for a username/password.
-- Tokens are stored **encrypted in the OS's native secure storage** (libsecret on Linux), never in plain text inside the app's own data.
-- Ships as an installable **.deb** package with a proper app icon, and a GUI **Uninstall Git Manager** entry — no terminal needed for install or removal.
+- Tokens are stored **encrypted in the OS's native secure storage** (libsecret on Linux, Credential Manager on Windows), never in plain text inside the app's own data.
+- Ships as an installable **.deb** package on Linux, with a proper app icon and a GUI **Uninstall Git Manager** entry — no terminal needed for install or removal.
 
 ## Screens
 
@@ -51,6 +51,8 @@ If you use a **fine-grained token** instead, make sure the repository (or "all r
 
 ## Getting started (run from source)
 
+### Linux
+
 Requirements:
 
 - Flutter 3.x (stable channel) with Linux desktop enabled (`flutter config --enable-linux-desktop`).
@@ -62,7 +64,22 @@ flutter pub get
 flutter run -d linux
 ```
 
+### Windows
+
+Requirements:
+
+- Flutter 3.x (stable channel) with Windows desktop enabled (`flutter config --enable-windows-desktop`).
+- Visual Studio 2022 with the "Desktop development with C++" workload (provides the MSVC toolchain and CMake used to build the native runner).
+- [Git for Windows](https://git-scm.com/download/win), on `PATH` — Git Manager shells out to the real `git` binary for `config` and credential storage.
+
+```powershell
+flutter pub get
+flutter run -d windows
+```
+
 ## Building the installable package
+
+### Linux (.deb)
 
 ```bash
 ./packaging/build_deb.sh
@@ -76,6 +93,14 @@ This assembles the release build into `git-manager_<version>_amd64.deb`, which i
 - An **"Uninstall Git Manager"** menu entry — no terminal required. It asks for confirmation, then uses a native password prompt (`pkexec`) to remove the package. Your saved accounts/tokens and git configuration are left untouched.
 
 Runtime dependencies (`libgtk-3-0`, `libsecret-1-0`, `git`, `polkitd`/`policykit-1`) are declared in the package and installed automatically by `apt`/`dpkg` if missing.
+
+### Windows
+
+```powershell
+flutter build windows --release
+```
+
+This produces `build\windows\x64\runner\Release\`, containing `git_manager.exe` and the DLLs it needs (Flutter engine, `flutter_secure_storage`, `url_launcher`) — copy that folder wherever you want to run it from. There's no installer/uninstaller wired up for Windows yet (unlike the Linux `.deb`); packaging it as an MSIX or an Inno Setup installer is a natural next step if that's needed.
 
 ## Architecture
 
@@ -108,7 +133,7 @@ Key decisions:
 
 - The domain `GitAccount` entity never carries the token — only `GitAccountModel` (data layer) does. Presentation code never sees raw tokens.
 - `Result<T>` (`Success`/`Failure`) is used instead of throwing across layer boundaries; only the data layer catches `AppException`s and maps them to `AppFailure`s.
-- `GitConfigDataSource` and `GitCredentialsDataSource` accept an optional `environmentOverride` (a `HOME` override) so they can be tested against the real `git` binary without touching the developer's actual `~/.gitconfig` / `~/.git-credentials`.
+- `GitConfigDataSource` and `GitCredentialsDataSource` accept an optional `environmentOverride` (a `HOME`/`USERPROFILE` override) so they can be tested against the real `git` binary without touching the developer's actual `~/.gitconfig` / `~/.git-credentials`.
 
 ## Testing
 
@@ -125,6 +150,6 @@ Covers:
 
 ## Security notes
 
-- Tokens are stored encrypted via `flutter_secure_storage`, backed by `libsecret` (the same store used by GNOME Keyring/KWallet).
-- `~/.git-credentials` is git's own standard mechanism for HTTPS credentials — it stores the active token in **plain text**, protected only by file permissions (`600`), the same trust level as an SSH private key. This is what GitHub itself recommends for PAT-based HTTPS auth.
+- Tokens are stored encrypted via `flutter_secure_storage`, backed by `libsecret` on Linux (the same store used by GNOME Keyring/KWallet) and by Credential Manager (DPAPI) on Windows.
+- `~/.git-credentials` (`%USERPROFILE%\.git-credentials` on Windows) is git's own standard mechanism for HTTPS credentials — it stores the active token in **plain text**. On Linux/macOS it's additionally protected with file permissions (`600`), the same trust level as an SSH private key; Windows relies on the user-profile ACLs already covering that directory. This is what GitHub itself recommends for PAT-based HTTPS auth.
 - Uninstalling the app does **not** delete your saved accounts, `~/.gitconfig` identity, or `~/.git-credentials` — remove those manually if you want a full cleanup.

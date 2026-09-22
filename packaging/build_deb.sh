@@ -14,7 +14,7 @@ PKG_NAME="git-manager"
 # taskbar can't associate the running window with this launcher entry
 # and its icon (even though the icon shows fine in the app menu, which
 # reads the .desktop file directly instead of matching a window).
-DESKTOP_ID="com.volenday.git_manager"
+DESKTOP_ID="com.turinconconnect.git_manager"
 ARCH="amd64"
 STAGE_DIR="$ROOT_DIR/build/deb/${PKG_NAME}"
 DEB_FILE="$ROOT_DIR/build/deb/${PKG_NAME}_${VERSION}_${ARCH}.deb"
@@ -59,7 +59,7 @@ Priority: optional
 Architecture: $ARCH
 Depends: libgtk-3-0, libsecret-1-0, git, polkitd | policykit-1
 Recommends: zenity, libnotify-bin
-Maintainer: Junior Garcia <junior.sacarias.garcia.diaz@volenday.com>
+Maintainer: Junior Garcia <junior@turinconconnect.com>
 Description: GitHub account manager to switch your git identity in one click
  Git Manager is a desktop app to add multiple GitHub accounts, verify
  them against the API, and switch the global git identity (user.name,

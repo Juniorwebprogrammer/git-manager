@@ -1,4 +1,4 @@
-@TestOn('linux || mac-os')
+@TestOn('linux || mac-os || windows')
 library;
 
 import 'dart:io';

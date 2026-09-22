@@ -6,4 +6,4 @@ Exec=/usr/bin/git-manager
 Icon=git-manager
 Categories=Development;Utility;
 Terminal=false
-StartupWMClass=com.volenday.git_manager
+StartupWMClass=com.turinconconnect.git_manager

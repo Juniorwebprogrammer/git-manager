@@ -46,11 +46,23 @@ class GitCredentialsDataSource {
   }
 
   File _credentialsFile() {
-    final home = environmentOverride?['HOME'] ?? Platform.environment['HOME'];
-    if (home == null || home.isEmpty) {
+    final env = environmentOverride ?? Platform.environment;
+    // Mirrors git's own lookup order: HOME first (respected on Windows too
+    // when set, e.g. by Git Bash), then USERPROFILE, which is what a plain
+    // Windows process has instead of HOME.
+    final home = _firstNonEmpty(env, const ['HOME', 'USERPROFILE']);
+    if (home == null) {
       throw const GitConfigException('Could not determine the HOME directory.');
     }
     return File('$home/.git-credentials');
+  }
+
+  String? _firstNonEmpty(Map<String, String> env, List<String> keys) {
+    for (final key in keys) {
+      final value = env[key];
+      if (value != null && value.isNotEmpty) return value;
+    }
+    return null;
   }
 
   Future<List<String>> _readLines(File file) async {

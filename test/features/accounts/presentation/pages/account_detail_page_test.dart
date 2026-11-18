@@ -51,6 +51,7 @@ void main() {
             )]));
 
     await _pumpDetail(tester, repository);
+    await tester.ensureVisible(find.widgetWithText(FilledButton, 'Connect'));
     await tester.tap(find.widgetWithText(FilledButton, 'Connect'));
     await tester.pumpAndSettle();
 

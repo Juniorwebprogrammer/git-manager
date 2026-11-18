@@ -25,3 +25,7 @@ class GitConfigException extends AppException {
 class AccountNotFoundException extends AppException {
   const AccountNotFoundException() : super('Account not found.');
 }
+
+class GitCommandException extends AppException {
+  const GitCommandException(super.message);
+}

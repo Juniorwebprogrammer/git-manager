@@ -10,8 +10,19 @@ import 'package:git_manager/features/accounts/domain/repositories/account_reposi
 import 'package:git_manager/features/accounts/presentation/pages/account_detail_page.dart';
 import 'package:git_manager/features/accounts/presentation/pages/accounts_page.dart';
 import 'package:git_manager/features/accounts/presentation/widgets/add_account_dialog.dart';
+import 'package:git_manager/features/repos/domain/repositories/git_repository.dart';
+import 'package:git_manager/features/repos/presentation/pages/workspace_page.dart';
 
 class _MockAccountRepository extends Mock implements AccountRepository {}
+
+class _InMemoryWorkspaceRepository implements WorkspaceRepository {
+  @override
+  Future<({List<String> tabs, int activeIndex})> load(String accountId) async =>
+      (tabs: <String>[], activeIndex: 0);
+
+  @override
+  Future<void> save(String accountId, List<String> tabs, int activeIndex) async {}
+}
 
 const _activeAccount = GitAccount(
   id: '1',
@@ -35,7 +46,10 @@ const _otherAccount = GitAccount(
 Future<void> _pumpAccountsPage(WidgetTester tester, AccountRepository repository) async {
   await tester.pumpWidget(
     ProviderScope(
-      overrides: [accountRepositoryProvider.overrideWithValue(repository)],
+      overrides: [
+        accountRepositoryProvider.overrideWithValue(repository),
+        workspaceRepositoryProvider.overrideWithValue(_InMemoryWorkspaceRepository()),
+      ],
       child: const MaterialApp(home: AccountsPage()),
     ),
   );
@@ -80,12 +94,24 @@ void main() {
     expect(find.byType(AddAccountDialog), findsOneWidget);
   });
 
-  testWidgets('tocar una tarjeta navega al detalle de esa cuenta', (tester) async {
+  testWidgets('tocar una tarjeta abre los proyectos (workspace) de esa cuenta', (tester) async {
     when(() => repository.getAccounts())
         .thenAnswer((_) async => const Success([_activeAccount]));
 
     await _pumpAccountsPage(tester, repository);
     await tester.tap(find.text('Personal Account'));
+    await tester.pumpAndSettle();
+
+    expect(find.byType(WorkspacePage), findsOneWidget);
+    expect(find.text('No projects open'), findsOneWidget);
+  });
+
+  testWidgets('el botón de info de la tarjeta navega al detalle de la cuenta', (tester) async {
+    when(() => repository.getAccounts())
+        .thenAnswer((_) async => const Success([_activeAccount]));
+
+    await _pumpAccountsPage(tester, repository);
+    await tester.tap(find.byTooltip('Account details'));
     await tester.pumpAndSettle();
 
     expect(find.byType(AccountDetailPage), findsOneWidget);

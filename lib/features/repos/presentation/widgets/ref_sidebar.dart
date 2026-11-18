@@ -1,0 +1,344 @@
+import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
+
+import '../../domain/entities/git_action.dart';
+import '../../domain/entities/repo_snapshot.dart';
+import '../../domain/repositories/git_repository.dart';
+import '../state/repo_notifier.dart';
+import 'ui_helpers.dart';
+
+/// Barra lateral: ramas locales, remotas, tags y stashes.
+class RefSidebar extends ConsumerStatefulWidget {
+  final RepoHandle repo;
+
+  const RefSidebar({super.key, required this.repo});
+
+  @override
+  ConsumerState<RefSidebar> createState() => _RefSidebarState();
+}
+
+class _RefSidebarState extends ConsumerState<RefSidebar> {
+  String _filter = '';
+  final _collapsed = <String>{};
+
+  bool _matches(String name) => _filter.isEmpty || name.toLowerCase().contains(_filter.toLowerCase());
+
+  @override
+  Widget build(BuildContext context) {
+    final snapshot = ref.watch(repoNotifierProvider(widget.repo).select((s) => s.snapshot));
+    if (snapshot == null) return const SizedBox.shrink();
+
+    final locals = snapshot.localBranches.where((r) => _matches(r.name)).toList();
+    final remotesByName = <String, List<GitRef>>{};
+    for (final r in snapshot.remoteBranches.where((r) => _matches(r.name))) {
+      remotesByName.putIfAbsent(r.remoteName!, () => []).add(r);
+    }
+    final tags = snapshot.tags.where((r) => _matches(r.name)).toList();
+    final stashes = snapshot.stashes.where((s) => _matches(s.message)).toList();
+
+    return Column(
+      children: [
+        Padding(
+          padding: const EdgeInsets.fromLTRB(8, 8, 8, 4),
+          child: TextField(
+            decoration: const InputDecoration(
+              isDense: true,
+              prefixIcon: Icon(Icons.filter_list, size: 18),
+              hintText: 'Filter',
+              border: OutlineInputBorder(),
+            ),
+            style: const TextStyle(fontSize: 13),
+            onChanged: (v) => setState(() => _filter = v),
+          ),
+        ),
+        Expanded(
+          child: ListView(
+            padding: const EdgeInsets.only(bottom: 16),
+            children: [
+              _section('LOCAL', Icons.laptop, locals.length, [
+                for (final r in locals) _RefTile(repo: widget.repo, gitRef: r, label: r.name),
+              ]),
+              _section('REMOTE', Icons.cloud_outlined, snapshot.remoteBranches.length, [
+                for (final entry in remotesByName.entries) ...[
+                  Padding(
+                    padding: const EdgeInsets.fromLTRB(28, 6, 8, 2),
+                    child: Row(
+                      children: [
+                        const Icon(Icons.dns_outlined, size: 14),
+                        const SizedBox(width: 6),
+                        Text(entry.key, style: Theme.of(context).textTheme.labelMedium),
+                      ],
+                    ),
+                  ),
+                  for (final r in entry.value)
+                    _RefTile(repo: widget.repo, gitRef: r, label: r.nameWithoutRemote, indent: 40),
+                ],
+              ]),
+              _section('TAGS', Icons.sell_outlined, tags.length, [
+                for (final r in tags) _RefTile(repo: widget.repo, gitRef: r, label: r.name),
+              ]),
+              _section('STASHES', Icons.inventory_2_outlined, stashes.length, [
+                for (final s in stashes) _StashTile(repo: widget.repo, stash: s),
+              ]),
+            ],
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _section(String title, IconData icon, int count, List<Widget> children) {
+    final theme = Theme.of(context);
+    final collapsed = _collapsed.contains(title);
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        InkWell(
+          onTap: () => setState(() => collapsed ? _collapsed.remove(title) : _collapsed.add(title)),
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(8, 10, 12, 6),
+            child: Row(
+              children: [
+                Icon(collapsed ? Icons.chevron_right : Icons.expand_more, size: 18),
+                const SizedBox(width: 2),
+                Icon(icon, size: 16, color: theme.colorScheme.onSurfaceVariant),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: Text(title,
+                      style: theme.textTheme.labelMedium?.copyWith(fontWeight: FontWeight.w700, letterSpacing: 0.8)),
+                ),
+                Text('$count', style: theme.textTheme.labelSmall?.copyWith(color: theme.colorScheme.onSurfaceVariant)),
+              ],
+            ),
+          ),
+        ),
+        if (!collapsed) ...children,
+      ],
+    );
+  }
+}
+
+class _RefTile extends ConsumerWidget {
+  final RepoHandle repo;
+  final GitRef gitRef;
+  final String label;
+  final double indent;
+
+  const _RefTile({required this.repo, required this.gitRef, required this.label, this.indent = 30});
+
+  GitAction? _checkoutAction() => switch (gitRef.kind) {
+        RefKind.local => CheckoutAction(gitRef.name),
+        RefKind.remote => CheckoutRemoteAction(gitRef.name, gitRef.nameWithoutRemote),
+        RefKind.tag => CheckoutDetachedAction(gitRef.name),
+      };
+
+  Future<void> _menu(BuildContext context, WidgetRef ref, Offset position) async {
+    final snapshot = ref.read(repoNotifierProvider(repo)).snapshot;
+    final current = snapshot?.currentBranch;
+    final isCurrent = gitRef.kind == RefKind.local && gitRef.name == current;
+    final error = Theme.of(context).colorScheme.error;
+
+    final value = await showContextMenu<String>(context, position, [
+      if (!isCurrent) menuItem('checkout', Icons.login, 'Checkout ${gitRef.name}'),
+      if (gitRef.kind != RefKind.tag && !isCurrent && current != null)
+        menuItem('merge', Icons.merge, 'Merge ${gitRef.name} into $current'),
+      menuItem('branch', Icons.add, 'Create branch from here…'),
+      if (gitRef.kind == RefKind.local) ...[
+        menuItem('push', Icons.cloud_upload_outlined, 'Push ${gitRef.name}'),
+        menuItem('forcepush', Icons.cloud_upload, 'Force push ${gitRef.name} (with lease)', color: error),
+        if (!isCurrent) menuItem('delete', Icons.delete_outline, 'Delete ${gitRef.name}', color: error),
+      ],
+      if (gitRef.kind == RefKind.remote)
+        menuItem('deleteremote', Icons.delete_outline, 'Delete ${gitRef.name} from remote', color: error),
+      if (gitRef.kind == RefKind.tag) ...[
+        menuItem('pushtag', Icons.cloud_upload_outlined, 'Push tag ${gitRef.name}'),
+        menuItem('deletetag', Icons.delete_outline, 'Delete tag ${gitRef.name}', color: error),
+      ],
+      const PopupMenuDivider(),
+      menuItem('copy', Icons.copy, 'Copy name'),
+    ]);
+    if (value == null || !context.mounted) return;
+
+    switch (value) {
+      case 'checkout':
+        await runGitAction(context, ref, repo, _checkoutAction()!);
+      case 'merge':
+        await runGitAction(context, ref, repo, MergeAction(gitRef.name), successMessage: 'Merged ${gitRef.name}');
+      case 'branch':
+        final name = await promptDialog(context,
+            title: 'Create branch', label: 'Branch name', helper: 'Starts at ${gitRef.name}', confirmLabel: 'Create');
+        if (name != null && context.mounted) {
+          await runGitAction(context, ref, repo, CreateBranchAction(name, startPoint: gitRef.name));
+        }
+      case 'push':
+        await runGitAction(context, ref, repo, PushAction(branch: gitRef.name), successMessage: 'Pushed ${gitRef.name}');
+      case 'forcepush':
+        if (await confirmDialog(context,
+                title: 'Force push',
+                message: 'Overwrite the remote "${gitRef.name}" with your local branch? '
+                    'Commits only on the remote will be lost (unless someone else pushed since your last fetch).',
+                confirmLabel: 'Force push',
+                destructive: true) &&
+            context.mounted) {
+          await runGitAction(context, ref, repo, PushAction(branch: gitRef.name, force: true),
+              successMessage: 'Force pushed ${gitRef.name}');
+        }
+      case 'delete':
+        if (await confirmDialog(context,
+                title: 'Delete branch',
+                message: 'Delete the local branch "${gitRef.name}"?',
+                confirmLabel: 'Delete',
+                destructive: true) &&
+            context.mounted) {
+          final failure = await ref.read(repoNotifierProvider(repo).notifier).run(DeleteBranchAction(gitRef.name));
+          if (failure == null || !context.mounted) return;
+          if (!failure.message.contains('not fully merged')) {
+            await showGitError(context, failure);
+            return;
+          }
+          if (await confirmDialog(context,
+                  title: 'Branch not fully merged',
+                  message: '"${gitRef.name}" has commits that are not merged anywhere else. Delete it anyway?',
+                  confirmLabel: 'Force delete',
+                  destructive: true) &&
+              context.mounted) {
+            await runGitAction(context, ref, repo, DeleteBranchAction(gitRef.name, force: true));
+          }
+        }
+      case 'deleteremote':
+        if (await confirmDialog(context,
+                title: 'Delete remote branch',
+                message: 'Delete "${gitRef.nameWithoutRemote}" from ${gitRef.remoteName}? This affects everyone.',
+                confirmLabel: 'Delete',
+                destructive: true) &&
+            context.mounted) {
+          await runGitAction(context, ref, repo, DeleteRemoteBranchAction(gitRef.remoteName!, gitRef.nameWithoutRemote));
+        }
+      case 'pushtag':
+        await runGitAction(context, ref, repo, PushTagAction(gitRef.name), successMessage: 'Pushed tag ${gitRef.name}');
+      case 'deletetag':
+        await runGitAction(context, ref, repo, DeleteTagAction(gitRef.name));
+      case 'copy':
+        await Clipboard.setData(ClipboardData(text: gitRef.name));
+    }
+  }
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final theme = Theme.of(context);
+    final currentBranch = ref.watch(repoNotifierProvider(repo).select((s) => s.snapshot?.currentBranch));
+    final isCurrent = gitRef.kind == RefKind.local && gitRef.name == currentBranch;
+
+    return InkWell(
+      onTap: () => ref.read(repoNotifierProvider(repo).notifier).selectCommit(gitRef.sha),
+      onDoubleTap: isCurrent ? null : () => runGitAction(context, ref, repo, _checkoutAction()!),
+      onSecondaryTapDown: (d) => _menu(context, ref, d.globalPosition),
+      child: Container(
+        height: 28,
+        padding: EdgeInsets.only(left: indent, right: 10),
+        color: isCurrent ? theme.colorScheme.primary.withValues(alpha: 0.12) : null,
+        child: Row(
+          children: [
+            if (isCurrent)
+              Icon(Icons.check, size: 15, color: theme.colorScheme.primary)
+            else
+              Icon(
+                gitRef.kind == RefKind.tag ? Icons.sell_outlined : Icons.call_split,
+                size: 14,
+                color: theme.colorScheme.onSurfaceVariant,
+              ),
+            const SizedBox(width: 8),
+            Expanded(
+              child: Tooltip(
+                message: gitRef.upstream == null ? gitRef.name : '${gitRef.name} → ${gitRef.upstream}',
+                waitDuration: const Duration(milliseconds: 600),
+                child: Text(
+                  label,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: theme.textTheme.bodyMedium?.copyWith(fontWeight: isCurrent ? FontWeight.w700 : null),
+                ),
+              ),
+            ),
+            if (gitRef.upstreamGone)
+              Tooltip(message: 'Upstream deleted', child: Icon(Icons.link_off, size: 14, color: theme.colorScheme.error)),
+            if (gitRef.ahead > 0) _CountBadge('↑${gitRef.ahead}'),
+            if (gitRef.behind > 0) _CountBadge('↓${gitRef.behind}'),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _CountBadge extends StatelessWidget {
+  final String text;
+
+  const _CountBadge(this.text);
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return Container(
+      margin: const EdgeInsets.only(left: 4),
+      padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 1),
+      decoration: BoxDecoration(
+        color: theme.colorScheme.secondaryContainer,
+        borderRadius: BorderRadius.circular(8),
+      ),
+      child: Text(text, style: theme.textTheme.labelSmall?.copyWith(color: theme.colorScheme.onSecondaryContainer)),
+    );
+  }
+}
+
+class _StashTile extends ConsumerWidget {
+  final RepoHandle repo;
+  final GitStash stash;
+
+  const _StashTile({required this.repo, required this.stash});
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final theme = Theme.of(context);
+    return InkWell(
+      onSecondaryTapDown: (d) async {
+        final value = await showContextMenu<String>(context, d.globalPosition, [
+          menuItem('pop', Icons.unarchive_outlined, 'Pop stash'),
+          menuItem('apply', Icons.content_paste, 'Apply stash'),
+          menuItem('drop', Icons.delete_outline, 'Drop stash', color: theme.colorScheme.error),
+        ]);
+        if (!context.mounted) return;
+        switch (value) {
+          case 'pop':
+            await runGitAction(context, ref, repo, StashPopAction(stash.ref));
+          case 'apply':
+            await runGitAction(context, ref, repo, StashApplyAction(stash.ref));
+          case 'drop':
+            if (await confirmDialog(context,
+                    title: 'Drop stash', message: 'Delete "${stash.message}"?', confirmLabel: 'Drop', destructive: true) &&
+                context.mounted) {
+              await runGitAction(context, ref, repo, StashDropAction(stash.ref));
+            }
+        }
+      },
+      onDoubleTap: () => runGitAction(context, ref, repo, StashApplyAction(stash.ref)),
+      child: Container(
+        height: 28,
+        padding: const EdgeInsets.only(left: 30, right: 10),
+        child: Row(
+          children: [
+            Icon(Icons.inventory_2_outlined, size: 14, color: theme.colorScheme.onSurfaceVariant),
+            const SizedBox(width: 8),
+            Expanded(
+              child: Tooltip(
+                message: '${stash.ref}\nRight-click for actions',
+                child: Text(stash.message, maxLines: 1, overflow: TextOverflow.ellipsis, style: theme.textTheme.bodyMedium),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}

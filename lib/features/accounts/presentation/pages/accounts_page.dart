@@ -5,6 +5,7 @@ import '../state/accounts_notifier.dart';
 import '../widgets/account_card.dart';
 import '../widgets/add_account_card.dart';
 import '../widgets/add_account_dialog.dart';
+import '../../../repos/presentation/pages/workspace_page.dart';
 import 'account_detail_page.dart';
 
 class AccountsPage extends ConsumerWidget {
@@ -61,6 +62,11 @@ class AccountsPage extends ConsumerWidget {
                 return AccountCard(
                   account: account,
                   onTap: () => Navigator.of(context).push(
+                    MaterialPageRoute(
+                      builder: (_) => WorkspacePage(accountId: account.id),
+                    ),
+                  ),
+                  onDetails: () => Navigator.of(context).push(
                     MaterialPageRoute(
                       builder: (_) => AccountDetailPage(accountId: account.id),
                     ),

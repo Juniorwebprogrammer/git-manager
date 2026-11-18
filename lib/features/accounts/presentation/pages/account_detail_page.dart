@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:url_launcher/url_launcher.dart';
 
+import '../../../repos/presentation/pages/workspace_page.dart';
 import '../../domain/entities/git_account.dart';
 import '../state/accounts_notifier.dart';
 import '../widgets/account_avatar.dart';
@@ -118,6 +119,19 @@ class AccountDetailPage extends ConsumerWidget {
                   ),
                 ),
                 const SizedBox(height: 24),
+                SizedBox(
+                  width: double.infinity,
+                  child: FilledButton.tonalIcon(
+                    onPressed: () => Navigator.of(context).push(
+                      MaterialPageRoute(
+                        builder: (_) => WorkspacePage(accountId: account.id),
+                      ),
+                    ),
+                    icon: const Icon(Icons.account_tree_outlined),
+                    label: const Text('Open projects'),
+                  ),
+                ),
+                const SizedBox(height: 12),
                 SizedBox(
                   width: double.infinity,
                   child: account.isActive

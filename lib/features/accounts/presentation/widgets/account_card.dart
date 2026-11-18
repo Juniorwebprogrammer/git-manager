@@ -7,7 +7,15 @@ class AccountCard extends StatelessWidget {
   final GitAccount account;
   final VoidCallback onTap;
 
-  const AccountCard({super.key, required this.account, required this.onTap});
+  /// Abre el detalle de la cuenta (botón ⓘ en la esquina), si se indica.
+  final VoidCallback? onDetails;
+
+  const AccountCard({
+    super.key,
+    required this.account,
+    required this.onTap,
+    this.onDetails,
+  });
 
   @override
   Widget build(BuildContext context) {
@@ -27,7 +35,28 @@ class AccountCard extends StatelessWidget {
           : null,
       child: InkWell(
         onTap: onTap,
-        child: Padding(
+        child: Stack(
+          children: [
+            Positioned.fill(child: _content(theme)),
+            if (onDetails != null)
+              Positioned(
+                top: 2,
+                right: 2,
+                child: IconButton(
+                  tooltip: 'Account details',
+                  onPressed: onDetails,
+                  icon: const Icon(Icons.info_outline, size: 20),
+                  visualDensity: VisualDensity.compact,
+                ),
+              ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _content(ThemeData theme) {
+    return Padding(
           padding: const EdgeInsets.all(16),
           child: Column(
             mainAxisAlignment: MainAxisAlignment.center,
@@ -74,8 +103,6 @@ class AccountCard extends StatelessWidget {
               ),
             ],
           ),
-        ),
-      ),
-    );
+        );
   }
 }

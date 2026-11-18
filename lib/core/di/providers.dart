@@ -2,6 +2,8 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:http/http.dart' as http;
 
+import '../git/git_runner.dart';
+
 import '../../features/accounts/data/datasources/account_local_data_source.dart';
 import '../../features/accounts/data/datasources/git_config_data_source.dart';
 import '../../features/accounts/data/datasources/git_credentials_data_source.dart';
@@ -13,6 +15,10 @@ import '../../features/accounts/domain/usecases/connect_account_usecase.dart';
 import '../../features/accounts/domain/usecases/get_accounts_usecase.dart';
 import '../../features/accounts/domain/usecases/remove_account_usecase.dart';
 import '../../features/accounts/domain/usecases/test_connection_usecase.dart';
+import '../../features/repos/data/datasources/git_cli_data_source.dart';
+import '../../features/repos/data/datasources/workspace_local_data_source.dart';
+import '../../features/repos/data/repositories/git_repository_impl.dart';
+import '../../features/repos/domain/repositories/git_repository.dart';
 
 final httpClientProvider = Provider<http.Client>((ref) {
   final client = http.Client();
@@ -67,4 +73,24 @@ final removeAccountUseCaseProvider = Provider<RemoveAccountUseCase>((ref) {
 
 final testConnectionUseCaseProvider = Provider<TestConnectionUseCase>((ref) {
   return TestConnectionUseCase(ref.watch(accountRepositoryProvider));
+});
+
+// ------------------------------------------------------------ repos / git
+
+final gitRunnerProvider = Provider<GitRunner>((ref) => const GitRunner());
+
+final gitCliDataSourceProvider = Provider<GitCliDataSource>((ref) {
+  return GitCliDataSource(ref.watch(gitRunnerProvider));
+});
+
+final gitRepositoryProvider = Provider<GitRepository>((ref) {
+  return GitRepositoryImpl(
+    cli: ref.watch(gitCliDataSourceProvider),
+    accounts: ref.watch(accountLocalDataSourceProvider),
+    github: ref.watch(gitHubRemoteDataSourceProvider),
+  );
+});
+
+final workspaceRepositoryProvider = Provider<WorkspaceRepository>((ref) {
+  return WorkspaceRepositoryImpl(WorkspaceLocalDataSource(ref.watch(secureStorageProvider)));
 });

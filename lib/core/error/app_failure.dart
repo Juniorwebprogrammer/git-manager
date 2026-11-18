@@ -31,6 +31,10 @@ class GitConfigFailure extends AppFailure {
   const GitConfigFailure(super.message);
 }
 
+class GitCommandFailure extends AppFailure {
+  const GitCommandFailure(super.message);
+}
+
 class UnknownFailure extends AppFailure {
   const UnknownFailure([super.message = 'An unexpected error occurred.']);
 }

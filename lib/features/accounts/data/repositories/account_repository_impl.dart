@@ -147,5 +147,6 @@ class AccountRepositoryImpl implements AccountRepository {
         ServerException(:final message) => NetworkFailure(message),
         StorageException(:final message) => StorageFailure(message),
         GitConfigException(:final message) => GitConfigFailure(message),
+        GitCommandException(:final message) => GitCommandFailure(message),
       };
 }

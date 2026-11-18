@@ -25,6 +25,20 @@ Switching git identities from the command line (SSH keys, `user.name`/`user.emai
 - Tokens are stored **encrypted in the OS's native secure storage** (libsecret on Linux, Credential Manager on Windows), never in plain text inside the app's own data.
 - Ships as an installable **.deb** package on Linux, with a proper app icon and a GUI **Uninstall Git Manager** entry — no terminal needed for install or removal.
 
+## Projects workspace (GitKraken-style)
+
+Click an account card to open its **workspace**: your projects in tabs (remembered per account), each one with a full git client.
+
+- **Open or clone**: open any local repository, or pick one of your GitHub repositories (listed with the account's token) and clone it.
+- **Commit graph**: the history of all branches, remotes and tags drawn as coloured lanes, with branch/tag labels, author, date and SHA. Double-click a label to check it out; right-click a commit to check it out, branch or tag from it, cherry-pick, revert or reset (soft / mixed / hard).
+- **Toolbar**: Pull, Push (sets upstream automatically on first push; offers force-with-lease if rejected), Fetch, Branch, Stash, Pop — with ahead/behind counters.
+- **Sidebar**: local branches, remotes, tags and stashes, with a filter. Right-click for merge, push, delete (local or remote), push tag, apply/pop/drop stash.
+- **Staging & commit**: unstaged/staged lists, stage/unstage/discard per file or all, commit message + description, amend, `Ctrl+Enter` to commit. Merge/cherry-pick conflicts are flagged with an *Abort* option.
+- **Diff & code viewer**: unified or side-by-side diffs and a full-file view, with line numbers and syntax highlighting — for local changes and for any commit.
+- Shortcuts: `Ctrl+T` new tab, `Ctrl+W` close tab, `Ctrl+Tab` next tab, `F5` refresh, `Esc` close the diff.
+
+**Per-account, without touching your global config.** Every git command run from a workspace uses that account's identity (`GIT_AUTHOR_*` / `GIT_COMMITTER_*`) and its token (sent to `github.com` as an HTTP `Authorization` header via `GIT_CONFIG_*` environment variables, so it never appears in the process list or in any file). You can have two accounts' workspaces open and push from each with the right credentials — no need to press *Connect* first. SSH remotes (`git@github.com:…`) keep using your SSH keys.
+
 ## Screens
 
 | Empty state | Accounts list | Account detail |

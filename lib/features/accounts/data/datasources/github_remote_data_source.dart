@@ -4,6 +4,7 @@ import 'dart:io';
 import 'package:http/http.dart' as http;
 
 import '../../../../core/error/app_exception.dart';
+import '../../../repos/domain/entities/remote_repository.dart';
 import '../models/github_user_dto.dart';
 
 /// Habla directamente con la API REST de GitHub para validar tokens y
@@ -55,6 +56,33 @@ class GitHubRemoteDataSource {
       // Sin scope user:email o error de red: se resuelve con el fallback.
     }
     return null;
+  }
+
+  /// Repos a los que tiene acceso el token (propios, de colaborador y de
+  /// organizaciones), los más recientes primero. Máximo [maxPages] × 100.
+  Future<List<RemoteRepository>> fetchRepositories(String token, {int maxPages = 5}) async {
+    final repos = <RemoteRepository>[];
+    for (var page = 1; page <= maxPages; page++) {
+      final response = await _get(
+        '/user/repos?per_page=100&page=$page&sort=updated'
+        '&affiliation=owner,collaborator,organization_member',
+        token,
+      );
+      final list = jsonDecode(response.body) as List<dynamic>;
+      for (final item in list) {
+        final map = item as Map<String, dynamic>;
+        repos.add(RemoteRepository(
+          fullName: map['full_name'] as String? ?? '',
+          name: map['name'] as String? ?? '',
+          description: map['description'] as String? ?? '',
+          cloneUrl: map['clone_url'] as String? ?? '',
+          isPrivate: map['private'] as bool? ?? false,
+          updatedAt: DateTime.tryParse(map['pushed_at'] as String? ?? map['updated_at'] as String? ?? ''),
+        ));
+      }
+      if (list.length < 100) break;
+    }
+    return repos;
   }
 
   String _noreplyEmailFor(GitHubUserDto dto) =>

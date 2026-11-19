@@ -17,6 +17,7 @@ import 'package:git_manager/features/repos/domain/entities/git_action.dart';
 import 'package:git_manager/features/repos/domain/entities/git_commit.dart';
 import 'package:git_manager/features/repos/domain/entities/file_change.dart';
 import 'package:git_manager/features/repos/domain/entities/pull_request.dart';
+import 'package:git_manager/features/repos/domain/entities/pull_request_detail.dart';
 import 'package:git_manager/features/repos/domain/entities/repo_extras.dart';
 import 'package:git_manager/features/repos/domain/entities/remote_repository.dart';
 import 'package:git_manager/features/repos/domain/entities/repo_snapshot.dart';
@@ -27,6 +28,7 @@ import 'package:git_manager/features/accounts/domain/repositories/account_reposi
 import 'package:git_manager/features/repos/presentation/pages/workspace_page.dart';
 import 'package:mocktail/mocktail.dart';
 import 'package:git_manager/features/repos/presentation/widgets/ref_sidebar.dart';
+import 'package:git_manager/features/repos/presentation/widgets/pull_request_view.dart';
 import 'package:git_manager/features/repos/presentation/widgets/file_history_view.dart';
 import 'package:git_manager/features/repos/presentation/widgets/compare_panel.dart';
 import 'package:git_manager/features/repos/presentation/widgets/blame_view.dart';
@@ -117,6 +119,52 @@ class _CliGitRepository implements GitRepository {
           ci: CiStatus.failure,
         ),
       ]);
+  final prOps = <PullRequestOp>[];
+
+  @override
+  Future<Result<PullRequestBundle>> loadPullRequest(RepoHandle repo, int number) async => Success(PullRequestBundle(
+        detail: PullRequestDetail(
+          number: number,
+          title: 'Add a much better login screen with validation',
+          body: '## Why\nUsers could not log in.\n\n- validates the email\n- [x] tests\n\n```dart\nfinal ok = true;\n```',
+          author: 'octo',
+          state: PullRequestState.open,
+          headRef: 'feature/login',
+          headSha: 'abc',
+          headRepoFullName: 'octo/demo',
+          baseRef: 'main',
+          url: 'https://github.com/octo/demo/pull/$number',
+          mergeable: true,
+          mergeableState: 'clean',
+          commitCount: 1,
+          additions: 4,
+          changedFiles: 1,
+        ),
+        timeline: [
+          PullRequestEvent(author: 'eve', body: 'Please add a test', review: ReviewState.changesRequested, date: DateTime(2026, 11, 19, 10)),
+          PullRequestEvent(author: 'bob', body: 'Looks good to me', date: DateTime(2026, 11, 19, 11)),
+        ],
+        commits: const [PullRequestCommit(sha: 'abcdef1234567', message: 'Add login screen', author: 'octo')],
+        files: const [
+          PullRequestFile(
+            path: 'login.dart',
+            type: ChangeType.added,
+            additions: 4,
+            patch: '@@ -0,0 +1,4 @@\n+class Login {\n+  // TODO\n+  final int retries = 3;\n+}',
+          ),
+        ],
+        checks: const [
+          PullRequestCheck(name: 'build', status: CiStatus.success, detail: 'success', url: 'https://ci/1'),
+          PullRequestCheck(name: 'tests', status: CiStatus.pending, detail: 'in_progress'),
+        ],
+      ));
+
+  @override
+  Future<Result<void>> pullRequestAction(RepoHandle repo, int number, PullRequestOp op) async {
+    prOps.add(op);
+    return const Success(null);
+  }
+
   @override
   Future<Result<PullRequest>> createPullRequest(
     RepoHandle repo, {
@@ -524,7 +572,12 @@ void main() {
   });
 
   group('GitHub pull requests', () {
-    setUp(() => runner.run(['remote', 'add', 'origin', 'https://github.com/octo/demo.git'], workingDirectory: repo));
+    setUp(() async {
+      git.prOps.clear();
+      final bare = '${tmp.path}/origin.git';
+      await runner.run(['init', '-q', '--bare', '-b', 'main', bare], workingDirectory: tmp.path);
+      await runner.run(['remote', 'add', 'origin', bare], workingDirectory: repo);
+    });
 
     testWidgets('lists open PRs with CI and creates a new one', (tester) async {
       await pumpWorkspace(tester, const Size(1280, 720));
@@ -533,9 +586,11 @@ void main() {
       expect(find.byIcon(Icons.check_circle), findsWidgets);
       expect(find.text('draft'), findsOneWidget);
 
-      await tester.tap(find.textContaining('Add a much better login screen'));
+      await tester.tapAt(tester.getCenter(find.textContaining('Add a much better login screen')),
+          buttons: kSecondaryButton);
       await settle(tester);
       expect(find.text('Checkout PR #12'), findsOneWidget);
+      expect(find.text('View pull request'), findsOneWidget);
       await tester.sendKeyEvent(LogicalKeyboardKey.escape);
       await settle(tester);
 
@@ -550,6 +605,66 @@ void main() {
       expect(find.text('Pull request #99 created'), findsOneWidget);
       expect(tester.takeException(), isNull);
     });
+
+    for (final size in const [Size(1280, 720), Size(900, 600)]) {
+      testWidgets('manage a PR inside the app at ${size.width.toInt()}px', (tester) async {
+        await pumpWorkspace(tester, size);
+        await tester.tap(find.textContaining('Add a much better login screen'));
+        await settle(tester);
+
+        // Cabecera y conversación.
+        expect(find.byType(PullRequestView), findsOneWidget);
+        expect(find.textContaining('#12  Add a much better login screen'), findsOneWidget);
+        expect(find.textContaining('Ready to merge'), findsOneWidget);
+        final conversation =
+            find.descendant(of: find.byKey(const ValueKey('pr-conversation')), matching: find.byType(Scrollable)).first;
+        Future<void> scrollTo(Finder f) => tester.scrollUntilVisible(f, 120, scrollable: conversation, maxScrolls: 30);
+        await scrollTo(find.text('Users could not log in.')); // markdown del cuerpo
+        await scrollTo(find.text('Please add a test'));
+        expect(find.textContaining('requested changes'), findsOneWidget);
+
+        // Comentar.
+        await tester.enterText(find.widgetWithText(TextField, 'Leave a comment (Markdown) · Ctrl+Enter to send'), 'Thanks!');
+        await tester.tap(find.widgetWithText(FilledButton, 'Comment'));
+        await settle(tester);
+        expect((git.prOps.last as CommentOnPullRequest).body, 'Thanks!');
+
+        // Ficheros con su diff, y checks.
+        await tester.tap(find.byTooltip('Files changed'));
+        await settle(tester);
+        expect(find.byType(PatchView), findsOneWidget);
+        expect(find.textContaining('retries'), findsOneWidget);
+        await tester.tap(find.byTooltip('Checks'));
+        await settle(tester);
+        expect(find.text('build'), findsOneWidget);
+        expect(find.text('in_progress'), findsOneWidget);
+
+        // Review: aprobar.
+        await tester.tap(find.widgetWithText(FilledButton, 'Review'));
+        await settle(tester);
+        await tester.tap(find.widgetWithText(FilledButton, 'Submit review'));
+        await settle(tester);
+        expect((git.prOps.last as ReviewPullRequest).event, ReviewEvent.approve);
+
+        // Merge con squash y borrado de rama (+ fetch local).
+        await tester.tap(find.widgetWithText(FilledButton, 'Merge'));
+        await settle(tester);
+        await tester.tap(find.text('Squash and merge'));
+        await settle(tester);
+        await tester.tap(find.text('Confirm squash and merge'));
+        await settle(tester);
+        final merge = git.prOps.last as MergePullRequest;
+        expect(merge.method, MergeMethod.squash);
+        expect(merge.title, 'Add a much better login screen with validation (#12)');
+        expect(merge.deleteBranch, isTrue);
+
+        // Esc cierra la vista.
+        await tester.sendKeyEvent(LogicalKeyboardKey.escape);
+        await settle(tester);
+        expect(find.byType(PullRequestView), findsNothing);
+        expect(tester.takeException(), isNull);
+      });
+    }
   });
 
   group('rebase conflict', () {

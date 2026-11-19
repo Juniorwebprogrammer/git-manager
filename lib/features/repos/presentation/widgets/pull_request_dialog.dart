@@ -1,6 +1,5 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:url_launcher/url_launcher.dart';
 
 import '../../../../core/di/providers.dart';
 import '../../../../core/error/result.dart';
@@ -21,7 +20,10 @@ Future<void> showCreatePullRequestDialog(BuildContext context, WidgetRef ref, Re
   ref.invalidate(pullRequestsProvider(repo));
   ScaffoldMessenger.of(context).showSnackBar(SnackBar(
     content: Text('Pull request #${created.number} created'),
-    action: SnackBarAction(label: 'Open', onPressed: () => launchUrl(Uri.parse(created.url))),
+    action: SnackBarAction(
+      label: 'View',
+      onPressed: () => ref.read(repoNotifierProvider(repo).notifier).openPullRequest(created.number),
+    ),
   ));
 }
 

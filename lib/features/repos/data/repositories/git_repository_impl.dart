@@ -9,6 +9,7 @@ import '../../domain/entities/git_action.dart';
 import '../../domain/entities/git_commit.dart';
 import '../../domain/entities/file_change.dart';
 import '../../domain/entities/pull_request.dart';
+import '../../domain/entities/pull_request_detail.dart';
 import '../../domain/entities/repo_extras.dart';
 import '../../domain/entities/remote_repository.dart';
 import '../../domain/entities/repo_snapshot.dart';
@@ -133,6 +134,18 @@ class GitRepositoryImpl implements GitRepository {
         return Future.wait(pulls.map((pr) async => pr.copyWith(
               ci: await _githubApi.fetchCiStatus(token, gh.info.owner, gh.info.name, pr.headSha),
             )));
+      });
+
+  @override
+  Future<Result<PullRequestBundle>> loadPullRequest(RepoHandle repo, int number) => _guard(() async {
+        final gh = await _github(repo);
+        return _githubApi.fetchPullRequestBundle(gh.identity.token, gh.info.owner, gh.info.name, number);
+      });
+
+  @override
+  Future<Result<void>> pullRequestAction(RepoHandle repo, int number, PullRequestOp op) => _guard(() async {
+        final gh = await _github(repo);
+        await _githubApi.pullRequestAction(gh.identity.token, gh.info.owner, gh.info.name, number, op);
       });
 
   @override

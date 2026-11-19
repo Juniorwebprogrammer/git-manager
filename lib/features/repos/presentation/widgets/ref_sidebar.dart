@@ -102,13 +102,13 @@ class _RefSidebarState extends ConsumerState<RefSidebar> {
     final visible = list.where((p) => _matches('#${p.number} ${p.title} ${p.headRef}')).toList();
 
     Widget small(IconData icon, String tooltip, VoidCallback onPressed) => IconButton(
-          tooltip: tooltip,
-          onPressed: onPressed,
-          icon: Icon(icon, size: 16),
-          visualDensity: VisualDensity.compact,
-          padding: EdgeInsets.zero,
-          constraints: const BoxConstraints(minWidth: 26, minHeight: 26),
-        );
+      tooltip: tooltip,
+      onPressed: onPressed,
+      icon: Icon(icon, size: 16),
+      visualDensity: VisualDensity.compact,
+      padding: EdgeInsets.zero,
+      constraints: const BoxConstraints(minWidth: 26, minHeight: 26),
+    );
 
     return _section(
       'PULL REQUESTS',
@@ -133,8 +133,10 @@ class _RefSidebarState extends ConsumerState<RefSidebar> {
         else if (list.isEmpty)
           Padding(
             padding: const EdgeInsets.fromLTRB(30, 2, 10, 6),
-            child: Text('No open pull requests',
-                style: theme.textTheme.bodySmall?.copyWith(color: theme.colorScheme.onSurfaceVariant)),
+            child: Text(
+              'No open pull requests',
+              style: theme.textTheme.bodySmall?.copyWith(color: theme.colorScheme.onSurfaceVariant),
+            ),
           )
         else
           for (final pr in visible) _PullRequestTile(repo: widget.repo, pr: pr),
@@ -174,7 +176,10 @@ class _RefSidebarState extends ConsumerState<RefSidebar> {
                 ),
                 ...actions,
                 if (count != null)
-                  Text('$count', style: theme.textTheme.labelSmall?.copyWith(color: theme.colorScheme.onSurfaceVariant)),
+                  Text(
+                    '$count',
+                    style: theme.textTheme.labelSmall?.copyWith(color: theme.colorScheme.onSurfaceVariant),
+                  ),
               ],
             ),
           ),
@@ -255,13 +260,24 @@ class _RefTile extends ConsumerWidget {
       case 'merge':
         await runGitAction(context, ref, repo, MergeAction(gitRef.name), successMessage: 'Merged ${gitRef.name}');
       case 'mergenoff':
-        await runGitAction(context, ref, repo, MergeAction(gitRef.name, mode: MergeMode.noFastForward),
-            successMessage: 'Merged ${gitRef.name}');
+        await runGitAction(
+          context,
+          ref,
+          repo,
+          MergeAction(gitRef.name, mode: MergeMode.noFastForward),
+          successMessage: 'Merged ${gitRef.name}',
+        );
       case 'squash':
         await squashMergeInto(context, ref, repo, gitRef.name, current!);
       case 'irebase':
-        await showInteractiveRebaseDialog(context, ref, repo,
-            base: gitRef.name, baseLabel: gitRef.name, branchLabel: current!);
+        await showInteractiveRebaseDialog(
+          context,
+          ref,
+          repo,
+          base: gitRef.name,
+          baseLabel: gitRef.name,
+          branchLabel: current!,
+        );
       case 'pr':
         await showCreatePullRequestDialog(context, ref, repo, head: gitRef.name);
       case 'rebasecurrent':
@@ -371,8 +387,8 @@ class _RefTile extends ConsumerWidget {
       onDoubleTap: isCurrent
           ? null
           : worktree != null
-              ? () => _explainWorktree(context, ref, worktree)
-              : () => runGitAction(context, ref, repo, _checkoutAction()!),
+          ? () => _explainWorktree(context, ref, worktree)
+          : () => runGitAction(context, ref, repo, _checkoutAction()!),
       onSecondaryTapDown: (d) => _menu(context, ref, d.globalPosition),
       child: Container(
         height: 28,
@@ -458,7 +474,8 @@ class _RefTile extends ConsumerWidget {
     final ok = await confirmDialog(
       context,
       title: 'Remove worktree',
-      message: 'Delete the folder\n$folder\nand free the branch "${gitRef.name}"? '
+      message:
+          'Delete the folder\n$folder\nand free the branch "${gitRef.name}"? '
           'The branch and its commits are kept. Git refuses if that folder has uncommitted changes.',
       confirmLabel: 'Remove',
       destructive: true,
@@ -517,7 +534,11 @@ class _RefTile extends ConsumerWidget {
             ? 'Merge $src into $target (create merge commit)'
             : 'Checkout $target and merge $src (create merge commit)',
       ),
-      menuItem('squash', Icons.compress, target == current ? 'Squash $src into $target…' : 'Checkout $target and squash $src…'),
+      menuItem(
+        'squash',
+        Icons.compress,
+        target == current ? 'Squash $src into $target…' : 'Checkout $target and squash $src…',
+      ),
       if (source.kind == RefKind.local) menuItem('rebase', Icons.low_priority, 'Rebase $src onto $target'),
       menuItem('rebasetarget', Icons.low_priority, 'Rebase $target onto $src'),
     ]);
@@ -530,8 +551,13 @@ class _RefTile extends ConsumerWidget {
       case 'merge':
         await runGitAction(context, ref, repo, MergeAction(src), successMessage: 'Merged $src into $target');
       case 'mergenoff':
-        await runGitAction(context, ref, repo, MergeAction(src, mode: MergeMode.noFastForward),
-            successMessage: 'Merged $src into $target');
+        await runGitAction(
+          context,
+          ref,
+          repo,
+          MergeAction(src, mode: MergeMode.noFastForward),
+          successMessage: 'Merged $src into $target',
+        );
       case 'squash':
         await squashMergeInto(context, ref, repo, src, target);
       case 'rebase':
@@ -657,21 +683,24 @@ class _PullRequestTile extends ConsumerWidget {
   const _PullRequestTile({required this.repo, required this.pr});
 
   Future<void> _checkout(BuildContext context, WidgetRef ref) => runGitAction(
-        context,
-        ref,
-        repo,
-        CheckoutPullRequestAction(number: pr.number, headRef: pr.headRef, sameRepo: !pr.isFromFork),
-        successMessage: 'Checked out PR #${pr.number}',
-      );
+    context,
+    ref,
+    repo,
+    CheckoutPullRequestAction(number: pr.number, headRef: pr.headRef, sameRepo: !pr.isFromFork),
+    successMessage: 'Checked out PR #${pr.number}',
+  );
 
   Future<void> _menu(BuildContext context, WidgetRef ref, Offset position) async {
     final value = await showContextMenu<String>(context, position, [
+      menuItem('view', Icons.visibility_outlined, 'View pull request'),
       menuItem('checkout', Icons.login, 'Checkout PR #${pr.number}'),
       menuItem('open', Icons.open_in_new, 'Open on GitHub'),
       menuItem('copy', Icons.link, 'Copy link'),
     ]);
     if (value == null || !context.mounted) return;
     switch (value) {
+      case 'view':
+        ref.read(repoNotifierProvider(repo).notifier).openPullRequest(pr.number);
       case 'checkout':
         await _checkout(context, ref);
       case 'open':
@@ -685,6 +714,7 @@ class _PullRequestTile extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final theme = Theme.of(context);
+    final viewing = ref.watch(repoNotifierProvider(repo).select((s) => s.pullRequestNumber)) == pr.number;
     final (ciIcon, ciColor, ciText) = switch (pr.ci) {
       CiStatus.success => (Icons.check_circle, const Color(0xFF3FB950), 'Checks passed'),
       CiStatus.failure => (Icons.cancel, const Color(0xFFF85149), 'Checks failed'),
@@ -692,58 +722,65 @@ class _PullRequestTile extends ConsumerWidget {
       CiStatus.none => (Icons.merge_type, theme.colorScheme.onSurfaceVariant, 'No checks'),
     };
 
-    return InkWell(
-      onTap: () => _menu(context, ref, (context.findRenderObject()! as RenderBox).localToGlobal(const Offset(40, 26))),
-      onDoubleTap: () => _checkout(context, ref),
-      onSecondaryTapDown: (d) => _menu(context, ref, d.globalPosition),
-      child: Tooltip(
-        message: '#${pr.number} ${pr.title}\n${pr.headRef} → ${pr.baseRef} · by ${pr.author}'
-            '${pr.draft ? ' · draft' : ''}${pr.isFromFork ? ' · from ${pr.headRepoFullName}' : ''}\n$ciText',
-        waitDuration: const Duration(milliseconds: 600),
-        child: Padding(
-          padding: const EdgeInsets.fromLTRB(30, 4, 10, 4),
-          child: Row(
-            children: [
-              Icon(ciIcon, size: 15, color: ciColor),
-              const SizedBox(width: 8),
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text.rich(
-                      TextSpan(children: [
+    return Material(
+      color: viewing ? theme.colorScheme.primary.withValues(alpha: 0.14) : Colors.transparent,
+      child: InkWell(
+        // Clic: ver la PR en la app; clic derecho: más acciones.
+        onTap: () => ref.read(repoNotifierProvider(repo).notifier).openPullRequest(pr.number),
+        onSecondaryTapDown: (d) => _menu(context, ref, d.globalPosition),
+        child: Tooltip(
+          message:
+              '#${pr.number} ${pr.title}\n${pr.headRef} → ${pr.baseRef} · by ${pr.author}'
+              '\nClick to open · right-click for more'
+              '${pr.draft ? ' · draft' : ''}${pr.isFromFork ? ' · from ${pr.headRepoFullName}' : ''}\n$ciText',
+          waitDuration: const Duration(milliseconds: 600),
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(30, 4, 10, 4),
+            child: Row(
+              children: [
+                Icon(ciIcon, size: 15, color: ciColor),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text.rich(
                         TextSpan(
-                          text: '#${pr.number} ',
-                          style: TextStyle(color: theme.colorScheme.onSurfaceVariant),
+                          children: [
+                            TextSpan(
+                              text: '#${pr.number} ',
+                              style: TextStyle(color: theme.colorScheme.onSurfaceVariant),
+                            ),
+                            TextSpan(text: pr.title),
+                          ],
                         ),
-                        TextSpan(text: pr.title),
-                      ]),
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: theme.textTheme.bodyMedium?.copyWith(
-                        color: pr.draft ? theme.colorScheme.onSurfaceVariant : null,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: theme.textTheme.bodyMedium?.copyWith(
+                          color: pr.draft ? theme.colorScheme.onSurfaceVariant : null,
+                        ),
                       ),
-                    ),
-                    Text(
-                      '${pr.headRef} → ${pr.baseRef}',
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: theme.textTheme.labelSmall?.copyWith(color: theme.colorScheme.onSurfaceVariant),
-                    ),
-                  ],
-                ),
-              ),
-              if (pr.draft)
-                Container(
-                  margin: const EdgeInsets.only(left: 4),
-                  padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 1),
-                  decoration: BoxDecoration(
-                    border: Border.all(color: theme.colorScheme.outline),
-                    borderRadius: BorderRadius.circular(8),
+                      Text(
+                        '${pr.headRef} → ${pr.baseRef}',
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: theme.textTheme.labelSmall?.copyWith(color: theme.colorScheme.onSurfaceVariant),
+                      ),
+                    ],
                   ),
-                  child: Text('draft', style: theme.textTheme.labelSmall),
                 ),
-            ],
+                if (pr.draft)
+                  Container(
+                    margin: const EdgeInsets.only(left: 4),
+                    padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 1),
+                    decoration: BoxDecoration(
+                      border: Border.all(color: theme.colorScheme.outline),
+                      borderRadius: BorderRadius.circular(8),
+                    ),
+                    child: Text('draft', style: theme.textTheme.labelSmall),
+                  ),
+              ],
+            ),
           ),
         ),
       ),

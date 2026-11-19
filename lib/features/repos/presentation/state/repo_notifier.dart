@@ -6,6 +6,7 @@ import '../../../../core/error/result.dart';
 import '../../domain/entities/file_change.dart';
 import '../../domain/entities/file_diff.dart';
 import '../../domain/entities/pull_request.dart';
+import '../../domain/entities/pull_request_detail.dart';
 import '../../domain/entities/repo_extras.dart';
 import '../../domain/entities/git_action.dart';
 import '../../domain/entities/git_commit.dart';
@@ -77,6 +78,9 @@ class RepoState {
   /// Comparación entre dos commits/ramas cualesquiera.
   final CompareSelection? compare;
 
+  /// Pull Request abierta en el panel central.
+  final int? pullRequestNumber;
+
   const RepoState({
     this.snapshot,
     this.commits = const [],
@@ -98,6 +102,7 @@ class RepoState {
     this.historyPath,
     this.blame,
     this.compare,
+    this.pullRequestNumber,
   });
 
   bool get isBusy => busyLabel != null;
@@ -126,6 +131,7 @@ class RepoState {
     Object? historyPath = _unset,
     Object? blame = _unset,
     Object? compare = _unset,
+    Object? pullRequestNumber = _unset,
   }) {
     T pick<T>(Object? value, T current) => identical(value, _unset) ? current : value as T;
     return RepoState(
@@ -149,6 +155,7 @@ class RepoState {
       historyPath: pick(historyPath, this.historyPath),
       blame: pick(blame, this.blame),
       compare: pick(compare, this.compare),
+      pullRequestNumber: pick(pullRequestNumber, this.pullRequestNumber),
     );
   }
 }
@@ -335,12 +342,12 @@ class RepoNotifier extends Notifier<RepoState> {
 
   void openHistory(String path) {
     closeFile();
-    state = state.copyWith(historyPath: path, blame: null);
+    state = state.copyWith(historyPath: path, blame: null, pullRequestNumber: null);
   }
 
   void openBlame(String path, {String? revision}) {
     closeFile();
-    state = state.copyWith(blame: (path: path, revision: revision), historyPath: null);
+    state = state.copyWith(blame: (path: path, revision: revision), historyPath: null, pullRequestNumber: null);
   }
 
   void closeHistoryAndBlame() {
@@ -348,12 +355,21 @@ class RepoNotifier extends Notifier<RepoState> {
     state = state.copyWith(historyPath: null, blame: null);
   }
 
+  void openPullRequest(int number) {
+    closeFile();
+    state = state.copyWith(pullRequestNumber: number, historyPath: null, blame: null);
+  }
+
+  void closePullRequest() => state = state.copyWith(pullRequestNumber: null);
+
   /// Esc: cierra lo que esté más "encima" en el panel central.
   void closeTopmost() {
     if (state.openFile != null) {
       closeFile();
     } else if (state.historyPath != null || state.blame != null) {
       closeHistoryAndBlame();
+    } else if (state.pullRequestNumber != null) {
+      closePullRequest();
     } else if (state.compare != null) {
       closeCompare();
     }
@@ -437,5 +453,15 @@ final commitTemplateProvider = FutureProvider.family<String?, RepoHandle>((ref, 
   return switch (result) {
     Success(:final value) => value,
     Failure() => null,
+  };
+});
+
+/// Todo lo de una PR (detalle, conversación, commits, ficheros, checks).
+final pullRequestBundleProvider =
+    FutureProvider.family<PullRequestBundle, ({RepoHandle repo, int number})>((ref, key) async {
+  final result = await ref.read(gitRepositoryProvider).loadPullRequest(key.repo, key.number);
+  return switch (result) {
+    Success(:final value) => value,
+    Failure(:final failure) => throw PullRequestsException(failure.message),
   };
 });

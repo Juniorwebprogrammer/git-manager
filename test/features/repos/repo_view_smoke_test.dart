@@ -15,7 +15,9 @@ import 'package:git_manager/features/repos/data/datasources/git_cli_data_source.
 import 'package:git_manager/features/repos/domain/entities/file_diff.dart';
 import 'package:git_manager/features/repos/domain/entities/git_action.dart';
 import 'package:git_manager/features/repos/domain/entities/git_commit.dart';
+import 'package:git_manager/features/repos/domain/entities/file_change.dart';
 import 'package:git_manager/features/repos/domain/entities/pull_request.dart';
+import 'package:git_manager/features/repos/domain/entities/repo_extras.dart';
 import 'package:git_manager/features/repos/domain/entities/remote_repository.dart';
 import 'package:git_manager/features/repos/domain/entities/repo_snapshot.dart';
 import 'package:git_manager/features/repos/domain/repositories/git_repository.dart';
@@ -24,6 +26,11 @@ import 'package:git_manager/features/accounts/domain/entities/git_account.dart';
 import 'package:git_manager/features/accounts/domain/repositories/account_repository.dart';
 import 'package:git_manager/features/repos/presentation/pages/workspace_page.dart';
 import 'package:mocktail/mocktail.dart';
+import 'package:git_manager/features/repos/presentation/widgets/ref_sidebar.dart';
+import 'package:git_manager/features/repos/presentation/widgets/file_history_view.dart';
+import 'package:git_manager/features/repos/presentation/widgets/compare_panel.dart';
+import 'package:git_manager/features/repos/presentation/widgets/blame_view.dart';
+import 'package:git_manager/core/system/system_launcher.dart';
 import 'package:git_manager/features/repos/presentation/widgets/commit_detail_panel.dart';
 import 'package:git_manager/features/repos/presentation/widgets/conflict_editor.dart';
 import 'package:git_manager/features/repos/presentation/widgets/commit_graph_view.dart';
@@ -63,6 +70,21 @@ class _CliGitRepository implements GitRepository {
       _wrap(() => cli.fileContent(repo.path, target));
   @override
   Future<Result<void>> run(RepoHandle repo, GitAction action) => _wrap(() => cli.run(repo.path, action, identity));
+  @override
+  Future<Result<UndoPlan?>> loadUndoPlan(RepoHandle repo) => _wrap(() => cli.undoPlan(repo.path));
+  @override
+  Future<Result<List<FileHistoryEntry>>> loadFileHistory(RepoHandle repo, String path) =>
+      _wrap(() => cli.fileHistory(repo.path, path));
+  @override
+  Future<Result<List<BlameLine>>> loadBlame(RepoHandle repo, String path, {String? revision}) =>
+      _wrap(() => cli.blame(repo.path, path, revision: revision));
+  @override
+  Future<Result<List<FileChange>>> loadComparison(RepoHandle repo, String base, String target) =>
+      _wrap(() => cli.comparison(repo.path, base, target));
+  @override
+  Future<Result<SigningConfig>> loadSigningConfig(RepoHandle repo) => _wrap(() => cli.signingConfig(repo.path));
+  @override
+  Future<Result<String?>> loadCommitTemplate(RepoHandle repo) => _wrap(() => cli.commitTemplate(repo.path));
   @override
   Future<Result<List<GitCommit>>> loadCommitsForRebase(RepoHandle repo, String base) =>
       _wrap(() => cli.commitsForRebase(repo.path, base));
@@ -142,6 +164,8 @@ const _account = GitAccount(
   profileUrl: '',
 );
 
+final launched = <LaunchCommand>[];
+
 void main() {
   late Directory tmp;
   late String repo;
@@ -149,6 +173,7 @@ void main() {
   final git = _CliGitRepository();
 
   setUp(() async {
+    launched.clear();
     tmp = await Directory.systemTemp.createTemp('gm_smoke_');
     repo = (await Directory('${tmp.path}/demo').create()).path;
     final h = (accountId: 'a', path: repo);
@@ -197,6 +222,14 @@ void main() {
           gitRepositoryProvider.overrideWithValue(git),
           accountRepositoryProvider.overrideWithValue(accounts),
           workspaceRepositoryProvider.overrideWithValue(_FixedWorkspace([repo])),
+        // Nunca abrir terminales/editores de verdad desde los tests.
+        systemLauncherProvider.overrideWithValue(SystemLauncher(
+          exists: (e) async => e == 'code' || e == 'x-terminal-emulator',
+          start: (c) async => launched.add(c),
+          operatingSystem: 'linux',
+          environment: const {},
+          resolveLink: (_) async => '/usr/bin/ptyxis',
+        )),
         ],
         child: MaterialApp(
           theme: AppTheme.dark(),
@@ -213,8 +246,8 @@ void main() {
       await pumpWorkspace(tester, size);
 
       // Los botones de la toolbar (de Pull a Folder) van centrados.
-      final toolsLeft = tester.getTopLeft(find.byTooltip('Pull (fast-forward or merge)')).dx;
-      final toolsRight = tester.getTopRight(find.byTooltip('Open folder')).dx;
+      final toolsLeft = tester.getTopLeft(find.byKey(const ValueKey('toolbar-first'))).dx;
+      final toolsRight = tester.getTopRight(find.byKey(const ValueKey('toolbar-last'))).dx;
       expect(((toolsLeft + toolsRight) / 2 - size.width / 2).abs(), lessThan(4), reason: 'toolbar not centered');
 
       // Grafo con commits, refs y WIP.
@@ -274,6 +307,149 @@ void main() {
       expect(tester.takeException(), isNull);
     });
   }
+
+  testWidgets('undo and redo the last merge from the toolbar', (tester) async {
+    await pumpWorkspace(tester, const Size(1440, 860));
+    Future<String> headSubject() async =>
+        (await tester.runAsync(() => runner.run(['log', '-1', '--format=%s'], workingDirectory: repo)))!.trim();
+
+    expect(find.byTooltip('Undo merge of feature/login'), findsOneWidget);
+    await tester.tap(find.byKey(const ValueKey('toolbar-first')));
+    await settle(tester);
+    expect(await headSubject(), 'Improve greeting');
+    expect(find.text('Undone: merge of feature/login'), findsOneWidget);
+
+    expect(find.byTooltip('Redo merge of feature/login'), findsOneWidget);
+    await tester.tap(find.byTooltip('Redo merge of feature/login'));
+    await settle(tester);
+    expect(await headSubject(), "Merge branch 'feature/login'");
+    expect(tester.takeException(), isNull);
+  });
+
+  for (final size in const [Size(1280, 720), Size(900, 600)]) {
+    testWidgets('blame and file history at ${size.width.toInt()}px', (tester) async {
+      await pumpWorkspace(tester, size);
+      await tester.tap(find.text('main.dart').first);
+      await settle(tester);
+
+      await tester.tap(find.byTooltip('Blame'));
+      await settle(tester);
+      expect(find.byType(BlameView), findsOneWidget);
+      expect(find.text('Not committed yet'), findsOneWidget); // la línea 2 cambiada en el WIP
+      expect(find.textContaining('Initial commit'), findsWidgets);
+
+      await tester.tap(find.byTooltip('File history'));
+      await settle(tester);
+      expect(find.byType(FileHistoryView), findsOneWidget);
+      expect(find.text('Improve greeting'), findsOneWidget);
+      await tester.tap(find.text('Initial commit'));
+      await settle(tester);
+      expect(find.byType(DiffViewer), findsOneWidget);
+
+      await tester.sendKeyEvent(LogicalKeyboardKey.escape); // cierra el diff
+      await settle(tester);
+      expect(find.byType(DiffViewer), findsNothing);
+      expect(find.byType(FileHistoryView), findsOneWidget);
+      await tester.sendKeyEvent(LogicalKeyboardKey.escape); // cierra el historial
+      await settle(tester);
+      expect(find.byType(FileHistoryView), findsNothing);
+      expect(tester.takeException(), isNull);
+    });
+  }
+
+  testWidgets('ctrl+click two commits to compare them', (tester) async {
+    await pumpWorkspace(tester, const Size(1280, 720));
+    await tester.tap(find.text('Add login screen'));
+    await settle(tester);
+    await tester.sendKeyDownEvent(LogicalKeyboardKey.controlLeft);
+    await tester.tap(find.text('Initial commit'));
+    await tester.sendKeyUpEvent(LogicalKeyboardKey.controlLeft);
+    await settle(tester);
+
+    expect(find.byType(ComparePanel), findsOneWidget);
+    expect(find.text('1 file changed'), findsOneWidget);
+    await tester.tap(find.descendant(of: find.byType(ComparePanel), matching: find.text('login.dart')));
+    await settle(tester);
+    expect(find.byType(DiffViewer), findsOneWidget);
+    expect(find.textContaining('→'), findsWidgets);
+
+    await tester.tap(find.byTooltip('Close comparison'));
+    await settle(tester);
+    expect(find.byType(ComparePanel), findsNothing);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('conventional commit type and scope build the summary', (tester) async {
+    await pumpWorkspace(tester, const Size(1280, 720));
+    await tester.tap(find.byTooltip('Stage all changes'));
+    await settle(tester);
+
+    await tester.tap(find.text('type'));
+    await settle(tester);
+    await tester.tap(find.text('feat').last);
+    await settle(tester);
+    await tester.enterText(find.widgetWithText(TextField, 'scope (optional)'), 'ui');
+    await tester.enterText(find.widgetWithText(TextField, 'Summary (required)'), 'say hi');
+    await settle(tester);
+    expect(find.text('feat(ui): say hi'), findsOneWidget);
+
+    await tester.tap(find.text('Commit 2 files'));
+    await settle(tester);
+    final subject = await tester.runAsync(() => runner.run(['log', '-1', '--format=%s'], workingDirectory: repo));
+    expect(subject!.trim(), 'feat(ui): say hi');
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('signing settings dialog fits a small window', (tester) async {
+    await pumpWorkspace(tester, const Size(900, 600));
+    await tester.tap(find.byTooltip('Signing settings…'));
+    await settle(tester);
+    expect(find.text('Commit signing'), findsOneWidget);
+    expect(find.text('SSH key'), findsOneWidget);
+    await tester.tap(find.text('Cancel'));
+    await settle(tester);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('terminal and VS Code buttons launch the right commands', (tester) async {
+    await pumpWorkspace(tester, const Size(1280, 720));
+    await tester.tap(find.byTooltip('Open a terminal here'));
+    await settle(tester);
+    await tester.tap(find.byTooltip('Open the repository in VS Code'));
+    await settle(tester);
+    expect(launched.map((c) => c.toString()), [
+      'x-terminal-emulator --new-window -d $repo',
+      'code $repo',
+    ]);
+  });
+
+  group('worktrees', () {
+    late String wt;
+    setUp(() async {
+      wt = '${tmp.path}/login-wt';
+      await runner.run(['worktree', 'add', '-q', wt, 'feature/login'], workingDirectory: repo);
+    });
+
+    testWidgets('branch in another worktree is marked and explained', (tester) async {
+      await pumpWorkspace(tester, const Size(1280, 720));
+      expect(find.byIcon(Icons.folder_copy_outlined), findsOneWidget);
+
+      final tile = find.descendant(of: find.byType(RefSidebar), matching: find.text('feature/login'));
+      await tester.tap(tile);
+      await tester.pump(const Duration(milliseconds: 50));
+      await tester.tap(tile);
+      await settle(tester);
+      expect(find.textContaining('is open in another folder'), findsOneWidget);
+
+      await tester.tap(find.text('Remove worktree…'));
+      await settle(tester);
+      await tester.tap(find.widgetWithText(FilledButton, 'Remove'));
+      await settle(tester);
+      expect(find.byIcon(Icons.folder_copy_outlined), findsNothing);
+      expect(await tester.runAsync(() => Directory(wt).exists()), isFalse);
+      expect(tester.takeException(), isNull);
+    });
+  });
 
   testWidgets('hovering a "+N" ref chip lists every ref and checks one out on click', (tester) async {
     await pumpWorkspace(tester, const Size(1280, 720));

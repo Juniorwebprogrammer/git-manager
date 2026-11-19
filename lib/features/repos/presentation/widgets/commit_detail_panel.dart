@@ -4,6 +4,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../domain/entities/file_change.dart';
 import '../../domain/entities/file_diff.dart';
+import '../../domain/entities/git_commit.dart';
 import '../../domain/repositories/git_repository.dart';
 import '../state/repo_notifier.dart';
 import 'staging_panel.dart';
@@ -88,6 +89,8 @@ class CommitDetailPanel extends ConsumerWidget {
                   child: Text('committed by ${detail.committerName}',
                       style: theme.textTheme.bodySmall?.copyWith(color: faded)),
                 ),
+              if (detail.signature != SignatureStatus.none)
+                Padding(padding: const EdgeInsets.only(top: 8), child: _SignatureBadge(detail)),
               if (detail.parents.isNotEmpty) ...[
                 const SizedBox(height: 10),
                 Wrap(
@@ -135,6 +138,8 @@ class CommitDetailPanel extends ConsumerWidget {
             itemBuilder: (context, i) {
               final c = detail.changes[i];
               return FileChangeTile(
+                onSecondaryTapDown: (d) =>
+                    showFileMenu(context, ref, repo, c.path, d.globalPosition, revision: detail.sha),
                 change: c,
                 selected: open?.source == DiffSource.commit && open?.commitSha == detail.sha && open?.path == c.path,
                 onTap: () => notifier.openFile(DiffTarget(
@@ -150,6 +155,45 @@ class CommitDetailPanel extends ConsumerWidget {
           ),
         ),
       ],
+    );
+  }
+}
+
+class _SignatureBadge extends StatelessWidget {
+  final GitCommitDetail detail;
+
+  const _SignatureBadge(this.detail);
+
+  @override
+  Widget build(BuildContext context) {
+    final (icon, color, text, help) = switch (detail.signature) {
+      SignatureStatus.good => (Icons.verified, const Color(0xFF3FB950), 'Verified signature', 'Signed with a trusted key.'),
+      SignatureStatus.unknownValidity =>
+        (Icons.verified_outlined, const Color(0xFFD29922), 'Signed (key not trusted)', 'Valid signature from a key you have not marked as trusted.'),
+      SignatureStatus.bad => (Icons.gpp_bad_outlined, const Color(0xFFF85149), 'Bad signature', 'The signature does not match the commit.'),
+      _ => (Icons.help_outline, const Color(0xFF8D96A0), 'Signed (cannot verify)', 'This computer cannot check the signature (missing public key or allowed signers file).'),
+    };
+    return Tooltip(
+      message: detail.signer.isEmpty ? help : '$help\nSigner: ${detail.signer}',
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+        decoration: BoxDecoration(
+          border: Border.all(color: color.withValues(alpha: 0.7)),
+          borderRadius: BorderRadius.circular(12),
+        ),
+        child: Row(mainAxisSize: MainAxisSize.min, children: [
+          Icon(icon, size: 14, color: color),
+          const SizedBox(width: 5),
+          Flexible(
+            child: Text(
+              detail.signer.isEmpty ? text : '$text · ${detail.signer}',
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: Theme.of(context).textTheme.labelSmall?.copyWith(color: color),
+            ),
+          ),
+        ]),
+      ),
     );
   }
 }

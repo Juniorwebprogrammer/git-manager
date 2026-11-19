@@ -56,7 +56,11 @@ class GitOutput {
 class GitRunner {
   final String executable;
 
-  const GitRunner({this.executable = 'git'});
+  /// Variables extra para todos los comandos (p. ej. aislar la config
+  /// global en tests con GIT_CONFIG_GLOBAL).
+  final Map<String, String> environment;
+
+  const GitRunner({this.executable = 'git', this.environment = const {}});
 
   static const _codec = Utf8Codec(allowMalformed: true);
 
@@ -83,6 +87,10 @@ class GitRunner {
           'GIT_TERMINAL_PROMPT': '0',
           'GIT_EDITOR': 'true',
           'GIT_MERGE_AUTOEDIT': 'no',
+          // Mensajes de git en inglés, como la interfaz (y reconocibles en
+          // friendlyGitError), sin tocar la codificación.
+          'LANGUAGE': 'C',
+          ...environment,
           ...?identity?.toEnvironment(),
           ...?extraEnvironment,
         },
@@ -110,11 +118,37 @@ class GitRunner {
       extraEnvironment: extraEnvironment,
     );
     if (!out.ok) {
-      final msg = out.message;
+      final msg = friendlyGitError(out.message);
       throw GitCommandException(
         msg.isEmpty ? 'git ${args.first} failed (exit code ${out.exitCode}).' : msg,
       );
     }
     return out.stdout;
   }
+}
+
+/// Traduce errores de git crípticos a algo accionable. Si no reconoce el
+/// error, lo devuelve tal cual.
+String friendlyGitError(String message) {
+  final worktree = RegExp(r"'([^']+)' is already (?:used by worktree|checked out) at '([^']+)'").firstMatch(message);
+  if (worktree != null) {
+    final branch = worktree.group(1)!;
+    final folder = worktree.group(2)!;
+    return 'The branch "$branch" is already open in another folder (a git worktree):\n'
+        '$folder\n\n'
+        'Git does not allow the same branch to be checked out in two places at once. '
+        'Open that folder instead, or remove the worktree if you no longer need it '
+        '(right-click the branch → "Remove worktree").\n\n'
+        'Git said: $message';
+  }
+  final badConfig = RegExp(r"bad config variable '([^']+)' in file '([^']+)' at line (\d+)").firstMatch(message);
+  if (badConfig != null) {
+    final key = badConfig.group(1)!;
+    final hint = key == 'gpg.format'
+        ? 'It must be "openpgp", "ssh" or "x509" — or delete the line if you do not sign commits.'
+        : 'Fix or delete that line.';
+    return 'Your git configuration has an invalid value for "$key" in\n'
+        '${badConfig.group(2)} (line ${badConfig.group(3)}).\n\n$hint\n\nGit said: $message';
+  }
+  return message;
 }

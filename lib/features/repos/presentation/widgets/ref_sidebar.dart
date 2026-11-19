@@ -8,6 +8,7 @@ import '../../domain/entities/pull_request.dart';
 import '../../domain/entities/repo_snapshot.dart';
 import '../../domain/repositories/git_repository.dart';
 import '../state/repo_notifier.dart';
+import '../state/workspace_notifier.dart';
 import 'interactive_rebase_dialog.dart';
 import 'pull_request_dialog.dart';
 import 'ui_helpers.dart';
@@ -203,9 +204,15 @@ class _RefTile extends ConsumerWidget {
     final current = snapshot?.currentBranch;
     final isCurrent = gitRef.kind == RefKind.local && gitRef.name == current;
     final error = Theme.of(context).colorScheme.error;
+    final worktree = gitRef.kind == RefKind.local ? snapshot?.worktreeBranches[gitRef.name] : null;
 
     final value = await showContextMenu<String>(context, position, [
-      if (!isCurrent) menuItem('checkout', Icons.login, 'Checkout ${gitRef.name}'),
+      if (worktree != null) ...[
+        menuItem('openworktree', Icons.folder_copy_outlined, 'Open its worktree in a new tab'),
+        menuItem('removeworktree', Icons.folder_delete_outlined, 'Remove worktree…', color: error),
+      ] else if (!isCurrent)
+        menuItem('checkout', Icons.login, 'Checkout ${gitRef.name}'),
+      if (!isCurrent && current != null) menuItem('compare', Icons.compare_arrows, 'Compare with $current'),
       if (gitRef.kind != RefKind.tag && !isCurrent && current != null) ...[
         menuItem('merge', Icons.merge, 'Merge ${gitRef.name} into $current'),
         menuItem('mergenoff', Icons.call_merge, 'Merge ${gitRef.name} into $current (create merge commit)'),
@@ -239,6 +246,12 @@ class _RefTile extends ConsumerWidget {
     switch (value) {
       case 'checkout':
         await runGitAction(context, ref, repo, _checkoutAction()!);
+      case 'openworktree':
+        await _openWorktree(context, ref, worktree!);
+      case 'removeworktree':
+        await _removeWorktree(context, ref, worktree!);
+      case 'compare':
+        await ref.read(repoNotifierProvider(repo).notifier).compareRevisions(current!, gitRef.name);
       case 'merge':
         await runGitAction(context, ref, repo, MergeAction(gitRef.name), successMessage: 'Merged ${gitRef.name}');
       case 'mergenoff':
@@ -349,10 +362,17 @@ class _RefTile extends ConsumerWidget {
     final theme = Theme.of(context);
     final currentBranch = ref.watch(repoNotifierProvider(repo).select((s) => s.snapshot?.currentBranch));
     final isCurrent = gitRef.kind == RefKind.local && gitRef.name == currentBranch;
+    final worktree = gitRef.kind == RefKind.local
+        ? ref.watch(repoNotifierProvider(repo).select((s) => s.snapshot?.worktreeBranches[gitRef.name]))
+        : null;
 
     final Widget base = InkWell(
       onTap: () => ref.read(repoNotifierProvider(repo).notifier).selectCommit(gitRef.sha),
-      onDoubleTap: isCurrent ? null : () => runGitAction(context, ref, repo, _checkoutAction()!),
+      onDoubleTap: isCurrent
+          ? null
+          : worktree != null
+              ? () => _explainWorktree(context, ref, worktree)
+              : () => runGitAction(context, ref, repo, _checkoutAction()!),
       onSecondaryTapDown: (d) => _menu(context, ref, d.globalPosition),
       child: Container(
         height: 28,
@@ -381,6 +401,14 @@ class _RefTile extends ConsumerWidget {
                 ),
               ),
             ),
+            if (worktree != null)
+              Tooltip(
+                message: 'Open in another worktree:\n$worktree\n\nDouble-click for options',
+                child: Padding(
+                  padding: const EdgeInsets.only(left: 4),
+                  child: Icon(Icons.folder_copy_outlined, size: 14, color: theme.colorScheme.tertiary),
+                ),
+              ),
             if (gitRef.upstreamGone)
               Tooltip(
                 message: 'Upstream deleted',
@@ -419,6 +447,57 @@ class _RefTile extends ConsumerWidget {
               child: draggable,
             ),
     );
+  }
+
+  Future<void> _openWorktree(BuildContext context, WidgetRef ref, String folder) async {
+    final failure = await ref.read(workspaceNotifierProvider(repo.accountId).notifier).open(folder);
+    if (failure != null && context.mounted) await showGitError(context, failure);
+  }
+
+  Future<void> _removeWorktree(BuildContext context, WidgetRef ref, String folder) async {
+    final ok = await confirmDialog(
+      context,
+      title: 'Remove worktree',
+      message: 'Delete the folder\n$folder\nand free the branch "${gitRef.name}"? '
+          'The branch and its commits are kept. Git refuses if that folder has uncommitted changes.',
+      confirmLabel: 'Remove',
+      destructive: true,
+    );
+    if (ok && context.mounted) {
+      await runGitAction(context, ref, repo, RemoveWorktreeAction(folder), successMessage: 'Worktree removed');
+    }
+  }
+
+  /// Doble clic en una rama de otro worktree: explicar y ofrecer salidas.
+  Future<void> _explainWorktree(BuildContext context, WidgetRef ref, String folder) async {
+    final choice = await showDialog<String>(
+      context: context,
+      builder: (context) => AlertDialog(
+        icon: const Icon(Icons.folder_copy_outlined),
+        title: Text('"${gitRef.name}" is open in another folder'),
+        content: ConstrainedBox(
+          constraints: const BoxConstraints(maxWidth: 480),
+          child: Text(
+            'This branch is checked out in a git worktree:\n\n$folder\n\n'
+            'Git does not allow the same branch to be checked out in two places at once, so it cannot be '
+            'checked out here. You can work on it from that folder, or remove the worktree if you no '
+            'longer need it (the branch is kept).',
+          ),
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(context), child: const Text('Cancel')),
+          TextButton(onPressed: () => Navigator.pop(context, 'remove'), child: const Text('Remove worktree…')),
+          FilledButton(onPressed: () => Navigator.pop(context, 'open'), child: const Text('Open in a new tab')),
+        ],
+      ),
+    );
+    if (!context.mounted) return;
+    switch (choice) {
+      case 'open':
+        await _openWorktree(context, ref, folder);
+      case 'remove':
+        await _removeWorktree(context, ref, folder);
+    }
   }
 
   Future<void> _onDrop(BuildContext context, WidgetRef ref, GitRef source, Offset position) async {

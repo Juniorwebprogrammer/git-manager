@@ -9,6 +9,7 @@ import '../../domain/entities/file_change.dart';
 import '../../domain/entities/file_diff.dart';
 import '../../domain/entities/git_action.dart';
 import '../../domain/entities/git_commit.dart';
+import '../../domain/entities/repo_extras.dart';
 import '../../domain/entities/repo_snapshot.dart';
 import '../parsers/git_parsers.dart';
 
@@ -43,6 +44,7 @@ class GitCliDataSource {
       _git.run(['stash', 'list', '--format=%gd%x1f%s'], workingDirectory: path),
       _git.run(['remote'], workingDirectory: path),
       _git.run(['rev-parse', '--absolute-git-dir'], workingDirectory: path),
+      _git.tryRun(['worktree', 'list', '--porcelain'], workingDirectory: path).then((o) => o.ok ? o.stdout : ''),
     ]);
 
     final status = parseStatus(results[0]);
@@ -62,6 +64,7 @@ class GitCliDataSource {
       unstaged: status.unstaged,
       pendingOperation: pending.operation,
       rebase: pending.rebase,
+      worktreeBranches: parseWorktrees(results[7], path),
     );
   }
 
@@ -282,6 +285,16 @@ class GitCliDataSource {
         await _checkoutPullRequest(path, identity, number: number, headRef: headRef, sameRepo: sameRepo);
       case InteractiveRebaseAction(:final base, :final steps):
         await _interactiveRebase(path, identity, base, steps);
+      case RemoveWorktreeAction(path: final worktree):
+        await git(['worktree', 'remove', worktree]);
+      case ConfigureSigningAction(:final format, :final key, :final signByDefault):
+        await git(['config', '--local', 'gpg.format', format == SigningFormat.ssh ? 'ssh' : 'openpgp']);
+        if (key.trim().isEmpty) {
+          await _git.tryRun(['config', '--local', '--unset', 'user.signingkey'], workingDirectory: path);
+        } else {
+          await git(['config', '--local', 'user.signingkey', key.trim()]);
+        }
+        await git(['config', '--local', 'commit.gpgsign', '$signByDefault']);
       case StashAction(:final message):
         await git(['stash', 'push', '--include-untracked', if (message != null && message.isNotEmpty) ...['-m', message]]);
       case StashPopAction(:final ref):
@@ -305,12 +318,14 @@ class GitCliDataSource {
         final tracked = changes.where((c) => c.type != ChangeType.untracked).map((c) => c.path).toList();
         if (untracked.isNotEmpty) await git(['clean', '-f', '-q', '--', ...untracked]);
         if (tracked.isNotEmpty) await git(['restore', '--worktree', '--', ...tracked]);
-      case CommitAction(:final message, :final amend):
+      case CommitAction(:final message, :final amend, :final sign):
         // Mensaje vacío: se reutiliza el de MERGE_MSG / el commit enmendado.
         await git([
           'commit',
           if (message.trim().isEmpty) '--no-edit' else ...['-m', message],
           if (amend) '--amend',
+          if (sign == true) '-S',
+          if (sign == false) '--no-gpg-sign',
         ]);
       case CherryPickAction(:final sha):
         await git(['cherry-pick', sha]);
@@ -428,6 +443,117 @@ class GitCliDataSource {
       workingDirectory: path,
     );
     return parseLog(out);
+  }
+
+  /// "Undo" a partir del reflog: el último checkout, o el último movimiento
+  /// de la rama actual (commit, amend, merge, reset, rebase, pull…).
+  Future<UndoPlan?> undoPlan(String path) async {
+    final gitDir = (await _git.run(['rev-parse', '--absolute-git-dir'], workingDirectory: path)).trim();
+    if ((await _pendingOperation(gitDir)).operation != PendingOperation.none) return null;
+
+    Future<List<({String sha, String message})>> reflog(String ref, int n) async {
+      final out = await _git.tryRun(['reflog', '-n', '$n', '--format=%H%x1f%gs', ref], workingDirectory: path);
+      if (!out.ok) return const [];
+      return [
+        for (final line in out.stdout.split('\n'))
+          if (line.contains('\x1f')) (sha: line.split('\x1f')[0], message: line.split('\x1f').skip(1).join(' ')),
+      ];
+    }
+
+    Future<bool> isBranch(String name) async =>
+        (await _git.tryRun(['rev-parse', '-q', '--verify', 'refs/heads/$name'], workingDirectory: path)).ok;
+    Future<GitAction> checkoutOf(String name) async =>
+        await isBranch(name) ? CheckoutAction(name) : CheckoutDetachedAction(name);
+
+    final head = await reflog('HEAD', 1);
+    if (head.isEmpty) return null;
+    final checkout = RegExp(r'^checkout: moving from (.+) to (.+)$').firstMatch(head.first.message);
+    if (checkout != null) {
+      final from = checkout.group(1)!;
+      final to = checkout.group(2)!;
+      String short(String s) => RegExp(r'^[0-9a-f]{40}$').hasMatch(s) ? s.substring(0, 7) : s;
+      return UndoPlan(
+        label: 'Undo checkout of ${short(to)} (back to ${short(from)})',
+        undo: await checkoutOf(from),
+        redoLabel: 'Redo checkout of ${short(to)}',
+        redo: await checkoutOf(to),
+      );
+    }
+
+    final branch = (await _git.tryRun(['symbolic-ref', '-q', '--short', 'HEAD'], workingDirectory: path)).stdout.trim();
+    final entries = await reflog(branch.isEmpty ? 'HEAD' : 'refs/heads/$branch', 2);
+    if (entries.length < 2) return null;
+    final current = entries[0];
+    final previous = entries[1];
+    final message = current.message;
+    if (message.startsWith('branch: Created') || current.sha == previous.sha) return null;
+
+    final colon = message.indexOf(': ');
+    final operation = colon == -1 ? message : message.substring(0, colon);
+    final detail = colon == -1 ? '' : message.substring(colon + 2);
+    if (operation.startsWith('commit')) {
+      final what = operation == 'commit (amend)' ? 'amend of' : 'commit';
+      return UndoPlan(
+        label: "Undo $what '$detail' (changes stay staged)",
+        undo: ResetAction(previous.sha, ResetMode.soft),
+        redoLabel: "Redo $what '$detail'",
+        redo: ResetAction(current.sha, ResetMode.soft),
+      );
+    }
+    final name = operation.startsWith('rebase')
+        ? 'rebase'
+        : operation.startsWith('merge ')
+            ? 'merge of ${operation.substring(6)}'
+            : operation;
+    return UndoPlan(
+      label: 'Undo $name',
+      undo: ResetAction(previous.sha, ResetMode.keep),
+      redoLabel: 'Redo $name',
+      redo: ResetAction(current.sha, ResetMode.keep),
+    );
+  }
+
+  Future<List<FileHistoryEntry>> fileHistory(String path, String file) async {
+    final out = await _git.run(
+      ['log', '--follow', '-M', '-n', '500', '--name-status', '--format=$fileHistoryFormat', '--', file],
+      workingDirectory: path,
+    );
+    return parseFileHistory(out);
+  }
+
+  Future<List<BlameLine>> blame(String path, String file, {String? revision}) async {
+    final out = await _git.run(['blame', '--porcelain', ?revision, '--', file], workingDirectory: path);
+    return parseBlamePorcelain(out);
+  }
+
+  Future<List<FileChange>> comparison(String path, String base, String target) async {
+    final out = await _git.run(['diff', '--name-status', '-z', '-M', base, target], workingDirectory: path);
+    return parseNameStatus(out);
+  }
+
+  Future<SigningConfig> signingConfig(String path) async {
+    Future<String> get(List<String> args) async =>
+        (await _git.tryRun(['config', ...args], workingDirectory: path)).stdout.trim();
+    final sign = await get(['--type=bool', '--get', 'commit.gpgsign']);
+    final format = await get(['--get', 'gpg.format']);
+    return SigningConfig(
+      signByDefault: sign == 'true',
+      format: format == 'ssh' ? SigningFormat.ssh : SigningFormat.gpg,
+      key: await get(['--get', 'user.signingkey']),
+    );
+  }
+
+  Future<String?> commitTemplate(String path) async {
+    final out = await _git.tryRun(['config', '--get', 'commit.template'], workingDirectory: path);
+    var file = out.stdout.trim();
+    if (!out.ok || file.isEmpty) return null;
+    final home = Platform.environment['HOME'] ?? Platform.environment['USERPROFILE'] ?? '';
+    if (file.startsWith('~/')) file = p.join(home, file.substring(2));
+    if (p.isRelative(file)) file = p.join(path, file);
+    final f = File(file);
+    if (!await f.exists()) return null;
+    final text = cleanCommitTemplate(await f.readAsString());
+    return text.isEmpty ? null : text;
   }
 
   Future<String> remoteUrl(String path) async {

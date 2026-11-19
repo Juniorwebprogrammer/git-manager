@@ -7,7 +7,9 @@ import '../../../accounts/data/datasources/github_remote_data_source.dart';
 import '../../domain/entities/file_diff.dart';
 import '../../domain/entities/git_action.dart';
 import '../../domain/entities/git_commit.dart';
+import '../../domain/entities/file_change.dart';
 import '../../domain/entities/pull_request.dart';
+import '../../domain/entities/repo_extras.dart';
 import '../../domain/entities/remote_repository.dart';
 import '../../domain/entities/repo_snapshot.dart';
 import '../../domain/repositories/git_repository.dart';
@@ -83,6 +85,27 @@ class GitRepositoryImpl implements GitRepository {
   Future<Result<void>> run(RepoHandle repo, GitAction action) => _guard(() async {
         await _cli.run(repo.path, action, await _identity(repo.accountId));
       });
+
+  @override
+  Future<Result<UndoPlan?>> loadUndoPlan(RepoHandle repo) => _guard(() => _cli.undoPlan(repo.path));
+
+  @override
+  Future<Result<List<FileHistoryEntry>>> loadFileHistory(RepoHandle repo, String path) =>
+      _guard(() => _cli.fileHistory(repo.path, path));
+
+  @override
+  Future<Result<List<BlameLine>>> loadBlame(RepoHandle repo, String path, {String? revision}) =>
+      _guard(() => _cli.blame(repo.path, path, revision: revision));
+
+  @override
+  Future<Result<List<FileChange>>> loadComparison(RepoHandle repo, String base, String target) =>
+      _guard(() => _cli.comparison(repo.path, base, target));
+
+  @override
+  Future<Result<SigningConfig>> loadSigningConfig(RepoHandle repo) => _guard(() => _cli.signingConfig(repo.path));
+
+  @override
+  Future<Result<String?>> loadCommitTemplate(RepoHandle repo) => _guard(() => _cli.commitTemplate(repo.path));
 
   @override
   Future<Result<List<GitCommit>>> loadCommitsForRebase(RepoHandle repo, String base) =>

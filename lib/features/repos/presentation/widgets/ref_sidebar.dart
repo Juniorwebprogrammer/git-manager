@@ -1,11 +1,15 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:url_launcher/url_launcher.dart';
 
 import '../../domain/entities/git_action.dart';
+import '../../domain/entities/pull_request.dart';
 import '../../domain/entities/repo_snapshot.dart';
 import '../../domain/repositories/git_repository.dart';
 import '../state/repo_notifier.dart';
+import 'interactive_rebase_dialog.dart';
+import 'pull_request_dialog.dart';
 import 'ui_helpers.dart';
 
 /// Barra lateral: ramas locales, remotas, tags y stashes.
@@ -75,6 +79,7 @@ class _RefSidebarState extends ConsumerState<RefSidebar> {
                     _RefTile(repo: widget.repo, gitRef: r, label: r.nameWithoutRemote, indent: 40),
                 ],
               ]),
+              if (snapshot.remotes.isNotEmpty) _pullRequests(context),
               _section('TAGS', Icons.sell_outlined, tags.length, [
                 for (final r in tags) _RefTile(repo: widget.repo, gitRef: r, label: r.name),
               ]),
@@ -88,7 +93,60 @@ class _RefSidebarState extends ConsumerState<RefSidebar> {
     );
   }
 
-  Widget _section(String title, IconData icon, int count, List<Widget> children) {
+  /// Sección de Pull Requests de GitHub (se cargan con el token de la cuenta).
+  Widget _pullRequests(BuildContext context) {
+    final theme = Theme.of(context);
+    final pulls = ref.watch(pullRequestsProvider(widget.repo));
+    final list = pulls.value ?? const <PullRequest>[];
+    final visible = list.where((p) => _matches('#${p.number} ${p.title} ${p.headRef}')).toList();
+
+    Widget small(IconData icon, String tooltip, VoidCallback onPressed) => IconButton(
+          tooltip: tooltip,
+          onPressed: onPressed,
+          icon: Icon(icon, size: 16),
+          visualDensity: VisualDensity.compact,
+          padding: EdgeInsets.zero,
+          constraints: const BoxConstraints(minWidth: 26, minHeight: 26),
+        );
+
+    return _section(
+      'PULL REQUESTS',
+      Icons.merge_type,
+      pulls.hasValue ? list.length : null,
+      [
+        if (pulls.isLoading && !pulls.hasValue)
+          const Padding(
+            padding: EdgeInsets.all(10),
+            child: Center(child: SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2))),
+          )
+        else if (pulls.hasError && !pulls.hasValue)
+          Padding(
+            padding: const EdgeInsets.fromLTRB(30, 2, 10, 6),
+            child: Text(
+              pulls.error.toString(),
+              maxLines: 3,
+              overflow: TextOverflow.ellipsis,
+              style: theme.textTheme.bodySmall?.copyWith(color: theme.colorScheme.onSurfaceVariant),
+            ),
+          )
+        else if (list.isEmpty)
+          Padding(
+            padding: const EdgeInsets.fromLTRB(30, 2, 10, 6),
+            child: Text('No open pull requests',
+                style: theme.textTheme.bodySmall?.copyWith(color: theme.colorScheme.onSurfaceVariant)),
+          )
+        else
+          for (final pr in visible) _PullRequestTile(repo: widget.repo, pr: pr),
+      ],
+      actions: [
+        small(Icons.refresh, 'Reload pull requests', () => ref.invalidate(pullRequestsProvider(widget.repo))),
+        small(Icons.add, 'Create pull request', () => showCreatePullRequestDialog(context, ref, widget.repo)),
+        const SizedBox(width: 4),
+      ],
+    );
+  }
+
+  Widget _section(String title, IconData icon, int? count, List<Widget> children, {List<Widget> actions = const []}) {
     final theme = Theme.of(context);
     final collapsed = _collapsed.contains(title);
     return Column(
@@ -107,10 +165,15 @@ class _RefSidebarState extends ConsumerState<RefSidebar> {
                 Expanded(
                   child: Text(
                     title,
+                    maxLines: 1,
+                    softWrap: false,
+                    overflow: TextOverflow.fade,
                     style: theme.textTheme.labelMedium?.copyWith(fontWeight: FontWeight.w700, letterSpacing: 0.8),
                   ),
                 ),
-                Text('$count', style: theme.textTheme.labelSmall?.copyWith(color: theme.colorScheme.onSurfaceVariant)),
+                ...actions,
+                if (count != null)
+                  Text('$count', style: theme.textTheme.labelSmall?.copyWith(color: theme.colorScheme.onSurfaceVariant)),
               ],
             ),
           ),
@@ -143,13 +206,20 @@ class _RefTile extends ConsumerWidget {
 
     final value = await showContextMenu<String>(context, position, [
       if (!isCurrent) menuItem('checkout', Icons.login, 'Checkout ${gitRef.name}'),
-      if (gitRef.kind != RefKind.tag && !isCurrent && current != null)
+      if (gitRef.kind != RefKind.tag && !isCurrent && current != null) ...[
         menuItem('merge', Icons.merge, 'Merge ${gitRef.name} into $current'),
-      if (!isCurrent && current != null)
+        menuItem('mergenoff', Icons.call_merge, 'Merge ${gitRef.name} into $current (create merge commit)'),
+        menuItem('squash', Icons.compress, 'Squash ${gitRef.name} into $current…'),
+      ],
+      if (!isCurrent && current != null) ...[
         menuItem('rebasecurrent', Icons.low_priority, 'Rebase $current onto ${gitRef.name}'),
+        menuItem('irebase', Icons.reorder, 'Interactive rebase $current onto ${gitRef.name}…'),
+      ],
       if (gitRef.kind == RefKind.local && !isCurrent && current != null)
         menuItem('rebasethis', Icons.low_priority, 'Rebase ${gitRef.name} onto $current'),
       menuItem('branch', Icons.add, 'Create branch from here…'),
+      if (gitRef.kind == RefKind.local && (snapshot?.remotes.isNotEmpty ?? false))
+        menuItem('pr', Icons.merge_type, 'Create pull request from ${gitRef.name}…'),
       if (gitRef.kind == RefKind.local) ...[
         menuItem('push', Icons.cloud_upload_outlined, 'Push ${gitRef.name}'),
         menuItem('forcepush', Icons.cloud_upload, 'Force push ${gitRef.name} (with lease)', color: error),
@@ -171,6 +241,16 @@ class _RefTile extends ConsumerWidget {
         await runGitAction(context, ref, repo, _checkoutAction()!);
       case 'merge':
         await runGitAction(context, ref, repo, MergeAction(gitRef.name), successMessage: 'Merged ${gitRef.name}');
+      case 'mergenoff':
+        await runGitAction(context, ref, repo, MergeAction(gitRef.name, mode: MergeMode.noFastForward),
+            successMessage: 'Merged ${gitRef.name}');
+      case 'squash':
+        await squashMergeInto(context, ref, repo, gitRef.name, current!);
+      case 'irebase':
+        await showInteractiveRebaseDialog(context, ref, repo,
+            base: gitRef.name, baseLabel: gitRef.name, branchLabel: current!);
+      case 'pr':
+        await showCreatePullRequestDialog(context, ref, repo, head: gitRef.name);
       case 'rebasecurrent':
         await confirmAndRebase(context, ref, repo, onto: gitRef.name, branchLabel: current!);
       case 'rebasethis':
@@ -351,16 +431,30 @@ class _RefTile extends ConsumerWidget {
         Icons.merge,
         target == current ? 'Merge $src into $target' : 'Checkout $target and merge $src into it',
       ),
+      menuItem(
+        'mergenoff',
+        Icons.call_merge,
+        target == current
+            ? 'Merge $src into $target (create merge commit)'
+            : 'Checkout $target and merge $src (create merge commit)',
+      ),
+      menuItem('squash', Icons.compress, target == current ? 'Squash $src into $target…' : 'Checkout $target and squash $src…'),
       if (source.kind == RefKind.local) menuItem('rebase', Icons.low_priority, 'Rebase $src onto $target'),
       menuItem('rebasetarget', Icons.low_priority, 'Rebase $target onto $src'),
     ]);
     if (value == null || !context.mounted) return;
+    if (value.startsWith('merge') || value == 'squash') {
+      if (target != current && !await runGitAction(context, ref, repo, CheckoutAction(target))) return;
+      if (!context.mounted) return;
+    }
     switch (value) {
       case 'merge':
-        if (target != current && !await runGitAction(context, ref, repo, CheckoutAction(target))) return;
-        if (context.mounted) {
-          await runGitAction(context, ref, repo, MergeAction(src), successMessage: 'Merged $src into $target');
-        }
+        await runGitAction(context, ref, repo, MergeAction(src), successMessage: 'Merged $src into $target');
+      case 'mergenoff':
+        await runGitAction(context, ref, repo, MergeAction(src, mode: MergeMode.noFastForward),
+            successMessage: 'Merged $src into $target');
+      case 'squash':
+        await squashMergeInto(context, ref, repo, src, target);
       case 'rebase':
         await confirmAndRebase(context, ref, repo, onto: target, branch: src, branchLabel: src);
       case 'rebasetarget':
@@ -471,6 +565,107 @@ class _StashTile extends ConsumerWidget {
               ),
             ),
           ],
+        ),
+      ),
+    );
+  }
+}
+
+class _PullRequestTile extends ConsumerWidget {
+  final RepoHandle repo;
+  final PullRequest pr;
+
+  const _PullRequestTile({required this.repo, required this.pr});
+
+  Future<void> _checkout(BuildContext context, WidgetRef ref) => runGitAction(
+        context,
+        ref,
+        repo,
+        CheckoutPullRequestAction(number: pr.number, headRef: pr.headRef, sameRepo: !pr.isFromFork),
+        successMessage: 'Checked out PR #${pr.number}',
+      );
+
+  Future<void> _menu(BuildContext context, WidgetRef ref, Offset position) async {
+    final value = await showContextMenu<String>(context, position, [
+      menuItem('checkout', Icons.login, 'Checkout PR #${pr.number}'),
+      menuItem('open', Icons.open_in_new, 'Open on GitHub'),
+      menuItem('copy', Icons.link, 'Copy link'),
+    ]);
+    if (value == null || !context.mounted) return;
+    switch (value) {
+      case 'checkout':
+        await _checkout(context, ref);
+      case 'open':
+        await launchUrl(Uri.parse(pr.url));
+      case 'copy':
+        await Clipboard.setData(ClipboardData(text: pr.url));
+        if (context.mounted) showToast(context, 'Link copied');
+    }
+  }
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final theme = Theme.of(context);
+    final (ciIcon, ciColor, ciText) = switch (pr.ci) {
+      CiStatus.success => (Icons.check_circle, const Color(0xFF3FB950), 'Checks passed'),
+      CiStatus.failure => (Icons.cancel, const Color(0xFFF85149), 'Checks failed'),
+      CiStatus.pending => (Icons.pending, const Color(0xFFD29922), 'Checks running'),
+      CiStatus.none => (Icons.merge_type, theme.colorScheme.onSurfaceVariant, 'No checks'),
+    };
+
+    return InkWell(
+      onTap: () => _menu(context, ref, (context.findRenderObject()! as RenderBox).localToGlobal(const Offset(40, 26))),
+      onDoubleTap: () => _checkout(context, ref),
+      onSecondaryTapDown: (d) => _menu(context, ref, d.globalPosition),
+      child: Tooltip(
+        message: '#${pr.number} ${pr.title}\n${pr.headRef} → ${pr.baseRef} · by ${pr.author}'
+            '${pr.draft ? ' · draft' : ''}${pr.isFromFork ? ' · from ${pr.headRepoFullName}' : ''}\n$ciText',
+        waitDuration: const Duration(milliseconds: 600),
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(30, 4, 10, 4),
+          child: Row(
+            children: [
+              Icon(ciIcon, size: 15, color: ciColor),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text.rich(
+                      TextSpan(children: [
+                        TextSpan(
+                          text: '#${pr.number} ',
+                          style: TextStyle(color: theme.colorScheme.onSurfaceVariant),
+                        ),
+                        TextSpan(text: pr.title),
+                      ]),
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: theme.textTheme.bodyMedium?.copyWith(
+                        color: pr.draft ? theme.colorScheme.onSurfaceVariant : null,
+                      ),
+                    ),
+                    Text(
+                      '${pr.headRef} → ${pr.baseRef}',
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: theme.textTheme.labelSmall?.copyWith(color: theme.colorScheme.onSurfaceVariant),
+                    ),
+                  ],
+                ),
+              ),
+              if (pr.draft)
+                Container(
+                  margin: const EdgeInsets.only(left: 4),
+                  padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 1),
+                  decoration: BoxDecoration(
+                    border: Border.all(color: theme.colorScheme.outline),
+                    borderRadius: BorderRadius.circular(8),
+                  ),
+                  child: Text('draft', style: theme.textTheme.labelSmall),
+                ),
+            ],
+          ),
         ),
       ),
     );

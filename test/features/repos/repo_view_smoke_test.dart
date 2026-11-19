@@ -15,6 +15,7 @@ import 'package:git_manager/features/repos/data/datasources/git_cli_data_source.
 import 'package:git_manager/features/repos/domain/entities/file_diff.dart';
 import 'package:git_manager/features/repos/domain/entities/git_action.dart';
 import 'package:git_manager/features/repos/domain/entities/git_commit.dart';
+import 'package:git_manager/features/repos/domain/entities/pull_request.dart';
 import 'package:git_manager/features/repos/domain/entities/remote_repository.dart';
 import 'package:git_manager/features/repos/domain/entities/repo_snapshot.dart';
 import 'package:git_manager/features/repos/domain/repositories/git_repository.dart';
@@ -24,6 +25,7 @@ import 'package:git_manager/features/accounts/domain/repositories/account_reposi
 import 'package:git_manager/features/repos/presentation/pages/workspace_page.dart';
 import 'package:mocktail/mocktail.dart';
 import 'package:git_manager/features/repos/presentation/widgets/commit_detail_panel.dart';
+import 'package:git_manager/features/repos/presentation/widgets/conflict_editor.dart';
 import 'package:git_manager/features/repos/presentation/widgets/commit_graph_view.dart';
 import 'package:git_manager/features/repos/presentation/widgets/diff_viewer.dart';
 import 'package:git_manager/features/repos/presentation/widgets/staging_panel.dart';
@@ -61,6 +63,58 @@ class _CliGitRepository implements GitRepository {
       _wrap(() => cli.fileContent(repo.path, target));
   @override
   Future<Result<void>> run(RepoHandle repo, GitAction action) => _wrap(() => cli.run(repo.path, action, identity));
+  @override
+  Future<Result<List<GitCommit>>> loadCommitsForRebase(RepoHandle repo, String base) =>
+      _wrap(() => cli.commitsForRebase(repo.path, base));
+  @override
+  Future<Result<GitHubRepoInfo>> githubRepoInfo(RepoHandle repo) async =>
+      const Success(GitHubRepoInfo(owner: 'octo', name: 'demo'));
+  @override
+  Future<Result<List<PullRequest>>> listPullRequests(RepoHandle repo) async => const Success([
+        PullRequest(
+          number: 12,
+          title: 'Add a much better login screen with validation',
+          author: 'octo',
+          headRef: 'feature/login',
+          headSha: 'abc',
+          headRepoFullName: 'octo/demo',
+          baseRef: 'main',
+          url: 'https://github.com/octo/demo/pull/12',
+          ci: CiStatus.success,
+        ),
+        PullRequest(
+          number: 7,
+          title: 'WIP: dark mode',
+          author: 'someone',
+          headRef: 'dark',
+          headSha: 'def',
+          headRepoFullName: 'someone/demo',
+          baseRef: 'main',
+          url: 'https://github.com/octo/demo/pull/7',
+          draft: true,
+          ci: CiStatus.failure,
+        ),
+      ]);
+  @override
+  Future<Result<PullRequest>> createPullRequest(
+    RepoHandle repo, {
+    required String title,
+    required String head,
+    required String base,
+    String body = '',
+    bool draft = false,
+  }) async =>
+      Success(PullRequest(
+        number: 99,
+        title: title,
+        author: 'octo',
+        headRef: head,
+        headSha: '',
+        headRepoFullName: 'octo/demo',
+        baseRef: base,
+        url: 'https://github.com/octo/demo/pull/99',
+      ));
+
   @override
   Future<Result<List<RemoteRepository>>> listRemoteRepositories(String accountId) async => const Success([]);
   @override
@@ -204,6 +258,8 @@ void main() {
       // overflow no llegaría a detectarse.
       await tester.pump(const Duration(milliseconds: 500));
       expect(find.textContaining('Rebase main onto feature/login'), findsOneWidget);
+      expect(find.textContaining('Squash feature/login into main'), findsOneWidget);
+      expect(find.textContaining('Interactive rebase main onto feature/login'), findsOneWidget);
       await tester.sendKeyEvent(LogicalKeyboardKey.escape);
       await settle(tester);
 
@@ -242,6 +298,84 @@ void main() {
     expect(tester.takeException(), isNull);
   });
 
+  testWidgets('stage a single line, then the rest of the hunk, from the diff', (tester) async {
+    await pumpWorkspace(tester, const Size(1280, 720));
+    await tester.tap(find.text('main.dart').first);
+    await settle(tester);
+
+    // Seleccionar solo la línea añadida y hacer stage de ella.
+    await tester.tap(find.descendant(of: find.byType(DiffViewer), matching: find.text('+')));
+    await settle(tester);
+    expect(find.text('1 line selected'), findsOneWidget);
+    await tester.tap(find.text('Stage 1 line'));
+    await settle(tester);
+
+    final index = await tester.runAsync(() => runner.run(['show', ':main.dart'], workingDirectory: repo));
+    expect(index, contains('print("hello world");'));
+    expect(index, contains('print("hi");'));
+    final inPanel = find.descendant(of: find.byType(StagingPanel), matching: find.text('main.dart'));
+    expect(inPanel, findsNWidgets(2)); // staged a medias: aparece en las dos listas
+
+    // El resto (la línea borrada) con "Stage hunk": el fichero queda entero en stage.
+    await tester.tap(find.text('Stage hunk'));
+    await settle(tester);
+    expect(inPanel, findsOneWidget);
+    expect(find.byType(DiffViewer), findsNothing); // ya no hay cambios sin stage
+    expect(find.text('Commit 1 file'), findsOneWidget);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('interactive rebase from the commit menu drops a commit', (tester) async {
+    await pumpWorkspace(tester, const Size(1024, 680));
+    await tester.tapAt(tester.getCenter(find.text('Initial commit')), buttons: kSecondaryButton);
+    await settle(tester);
+    await tester.tap(find.textContaining('Interactive rebase main from here'));
+    await settle(tester);
+
+    expect(find.text('Interactive rebase'), findsOneWidget);
+    expect(find.text('Add login screen'), findsWidgets);
+    final row = find.ancestor(of: find.text('Add login screen').last, matching: find.byType(Row)).first;
+    await tester.tap(find.descendant(of: row, matching: find.byType(DropdownButton<RebaseStepAction>)));
+    await settle(tester);
+    await tester.tap(find.text('drop').last);
+    await settle(tester);
+    await tester.tap(find.text('Start rebase'));
+    await settle(tester);
+
+    final log = await tester.runAsync(() => runner.run(['log', '--format=%s', 'main'], workingDirectory: repo));
+    expect(log!.trim().split('\n'), ['Improve greeting', 'Initial commit']);
+    expect(tester.takeException(), isNull);
+  });
+
+  group('GitHub pull requests', () {
+    setUp(() => runner.run(['remote', 'add', 'origin', 'https://github.com/octo/demo.git'], workingDirectory: repo));
+
+    testWidgets('lists open PRs with CI and creates a new one', (tester) async {
+      await pumpWorkspace(tester, const Size(1280, 720));
+      expect(find.text('PULL REQUESTS'), findsOneWidget);
+      expect(find.textContaining('Add a much better login screen'), findsOneWidget);
+      expect(find.byIcon(Icons.check_circle), findsWidgets);
+      expect(find.text('draft'), findsOneWidget);
+
+      await tester.tap(find.textContaining('Add a much better login screen'));
+      await settle(tester);
+      expect(find.text('Checkout PR #12'), findsOneWidget);
+      await tester.sendKeyEvent(LogicalKeyboardKey.escape);
+      await settle(tester);
+
+      await tester.tap(find.byTooltip('Create pull request').first);
+      await settle(tester);
+      expect(find.text('Create pull request'), findsWidgets);
+      // La rama no está en GitHub: desmarcar "push first" (no hay red en el test).
+      await tester.tap(find.textContaining('is not on GitHub yet'));
+      await settle(tester);
+      await tester.tap(find.widgetWithText(FilledButton, 'Create pull request'));
+      await settle(tester);
+      expect(find.text('Pull request #99 created'), findsOneWidget);
+      expect(tester.takeException(), isNull);
+    });
+  });
+
   group('rebase conflict', () {
     setUp(() async {
       final h = (accountId: 'a', path: repo);
@@ -275,6 +409,41 @@ void main() {
       await settle(tester);
       expect(find.textContaining('Rebasing topic'), findsNothing);
       expect(find.text('topic change'), findsOneWidget);
+      expect(tester.takeException(), isNull);
+    });
+
+    testWidgets('conflict editor fits a small window', (tester) async {
+      await pumpWorkspace(tester, const Size(900, 600));
+      await tester.tap(find.descendant(of: find.byType(StagingPanel), matching: find.text('main.dart')));
+      await settle(tester);
+      expect(find.byType(ConflictEditor), findsOneWidget);
+      await tester.tap(find.text('Use current'));
+      await settle(tester);
+      expect(find.textContaining('using current'), findsOneWidget);
+      expect(tester.takeException(), isNull);
+    });
+
+    testWidgets('conflict editor: use incoming, mark resolved, continue', (tester) async {
+      await pumpWorkspace(tester, const Size(1280, 720));
+      await tester.tap(find.descendant(of: find.byType(StagingPanel), matching: find.text('main.dart')));
+      await settle(tester);
+
+      expect(find.byType(ConflictEditor), findsOneWidget);
+      expect(find.textContaining('0 of 1 conflict'), findsOneWidget);
+      expect(find.text('Use incoming'), findsOneWidget);
+      await tester.tap(find.text('Use incoming'));
+      await settle(tester);
+      expect(find.textContaining('1 of 1 conflict'), findsOneWidget);
+      await tester.tap(find.text('Mark resolved'));
+      await settle(tester);
+
+      final continueButton = find.widgetWithText(FilledButton, 'Continue');
+      expect(tester.widget<FilledButton>(continueButton).onPressed, isNotNull);
+      await tester.tap(continueButton);
+      await settle(tester);
+      expect(find.textContaining('Rebasing topic'), findsNothing);
+      final text = await tester.runAsync(() => File('$repo/main.dart').readAsString());
+      expect(text, contains('print("topic")'));
       expect(tester.takeException(), isNull);
     });
   });

@@ -9,6 +9,9 @@ import 'package:git_manager/features/repos/domain/entities/git_action.dart';
 import 'package:git_manager/features/repos/domain/entities/git_commit.dart';
 import 'package:git_manager/features/repos/domain/entities/repo_snapshot.dart';
 import 'package:git_manager/features/repos/domain/graph/commit_graph.dart';
+import 'package:git_manager/core/error/app_exception.dart';
+import 'package:git_manager/features/repos/domain/conflicts/conflict_parser.dart';
+import 'package:git_manager/features/repos/domain/patch/patch_builder.dart';
 
 /// Tests de integración contra el binario git real, en un repo temporal.
 void main() {
@@ -275,6 +278,180 @@ void main() {
       final local = history.firstWhere((c) => c.subject == 'local work');
       final remoteWork = history.firstWhere((c) => c.subject == 'remote work');
       expect(local.parents, [remoteWork.sha]);
+    });
+  });
+
+  group('partial staging, merge modes, conflicts, interactive rebase, PR checkout', () {
+    Future<void> commitFile(String name, String content, String message) async {
+      await write(name, content);
+      await act(const StageAllAction());
+      await act(CommitAction(message));
+    }
+
+    Future<String> indexVersion(String file) => runner.run(['show', ':$file'], workingDirectory: repo);
+    Future<String> readFile(String file) => File('$repo/$file').readAsString();
+    Future<FileDiff> unstagedDiff(String f) => cli.diff(repo, DiffTarget(source: DiffSource.unstaged, path: f));
+    Future<FileDiff> stagedDiff(String f) => cli.diff(repo, DiffTarget(source: DiffSource.staged, path: f));
+    String lines(List<String> l) => '${l.join('\n')}\n';
+
+    test('stage and unstage a single hunk', () async {
+      final original = List.generate(12, (i) => 'line ${i + 1}');
+      await commitFile('h.txt', lines(original), 'twelve lines');
+      final changed = [...original]
+        ..[1] = 'LINE 2'
+        ..[10] = 'LINE 11';
+      await write('h.txt', lines(changed));
+
+      final diff = await unstagedDiff('h.txt');
+      expect(diff.hunks, hasLength(2));
+      await act(ApplyPatchAction(
+          buildPartialPatch(path: 'h.txt', hunk: diff.hunks.first, reverse: false)!, PatchTarget.stage));
+
+      expect((await stagedDiff('h.txt')).hunks, hasLength(1));
+      expect(await indexVersion('h.txt'), contains('LINE 2'));
+      expect(await indexVersion('h.txt'), isNot(contains('LINE 11')));
+      expect((await unstagedDiff('h.txt')).hunks.single.lines.any((l) => l.text == 'LINE 11'), isTrue);
+
+      final staged = await stagedDiff('h.txt');
+      await act(ApplyPatchAction(
+          buildPartialPatch(path: 'h.txt', hunk: staged.hunks.single, reverse: true)!, PatchTarget.unstage));
+      expect((await stagedDiff('h.txt')).hunks, isEmpty);
+      expect(await readFile('h.txt'), lines(changed)); // el fichero no se toca
+    });
+
+    test('stage selected lines only', () async {
+      await commitFile('l.txt', lines(['1', '2', '3', '4', '5', '6', '7']), 'seven');
+      await write('l.txt', lines(['1', '2', '3', 'a', 'b', 'c', '6', '7']));
+
+      final hunk = (await unstagedDiff('l.txt')).hunks.single;
+      final minus4 = hunk.lines.indexWhere((l) => l.type == DiffLineType.removed && l.text == '4');
+      final plusB = hunk.lines.indexWhere((l) => l.type == DiffLineType.added && l.text == 'b');
+      await act(ApplyPatchAction(
+        buildPartialPatch(path: 'l.txt', hunk: hunk, selected: {minus4, plusB}, reverse: false)!,
+        PatchTarget.stage,
+      ));
+      expect(await indexVersion('l.txt'), lines(['1', '2', '3', '5', 'b', '6', '7']));
+    });
+
+    test('discard selected lines from the working tree', () async {
+      await commitFile('d.txt', lines(['1', '2', '3', '4']), 'four');
+      await write('d.txt', lines(['1', 'X', 'Y', '4']));
+
+      final hunk = (await unstagedDiff('d.txt')).hunks.single;
+      final minus2 = hunk.lines.indexWhere((l) => l.type == DiffLineType.removed && l.text == '2');
+      final plusX = hunk.lines.indexWhere((l) => l.type == DiffLineType.added && l.text == 'X');
+      await act(ApplyPatchAction(
+        buildPartialPatch(path: 'd.txt', hunk: hunk, selected: {minus2, plusX}, reverse: true)!,
+        PatchTarget.discard,
+      ));
+      expect(await readFile('d.txt'), lines(['1', '2', 'Y', '4']));
+    });
+
+    test('merge --no-ff always creates a merge commit; squash makes one commit', () async {
+      await act(const CreateBranchAction('ff'));
+      await commitFile('ff.txt', 'x\n', 'ff work');
+      await act(const CheckoutAction('main'));
+      await act(const MergeAction('ff', mode: MergeMode.noFastForward));
+      var head = (await cli.history(repo, limit: 5)).first;
+      expect(head.parents, hasLength(2));
+
+      await act(const CreateBranchAction('sq'));
+      await commitFile('s1.txt', '1\n', 'sq one');
+      await commitFile('s2.txt', '2\n', 'sq two');
+      await act(const CheckoutAction('main'));
+      await act(const SquashMergeAction('sq', 'Squashed sq'));
+      head = (await cli.history(repo, limit: 10)).firstWhere((c) => c.refs.any((r) => r.name == 'main'));
+      expect(head.subject, 'Squashed sq');
+      expect(head.parents, hasLength(1));
+      expect(await File('$repo/s2.txt').exists(), isTrue);
+    });
+
+    test('resolve a conflict with the parsed file, then finish the merge', () async {
+      await act(const CreateBranchAction('other'));
+      await commitFile('c.txt', 'theirs\n', 'other');
+      await act(const CheckoutAction('main'));
+      await commitFile('c.txt', 'mine\n', 'main');
+      await expectLater(act(const MergeAction('other')), throwsA(anything));
+
+      final content = await cli.fileContent(
+          repo, const DiffTarget(source: DiffSource.unstaged, path: 'c.txt', conflicted: true));
+      final parsed = parseConflicts(content.text);
+      expect(parsed.conflicts.single.ours, ['mine']);
+      await act(ResolveConflictAction('c.txt', parsed.render([ConflictChoice.theirs])));
+
+      var snap = await cli.snapshot(repo);
+      expect(snap.hasConflicts, isFalse);
+      await act(const ContinueOperationAction());
+      snap = await cli.snapshot(repo);
+      expect(snap.pendingOperation, PendingOperation.none);
+      expect(await readFile('c.txt'), 'theirs\n');
+    });
+
+    test('interactive rebase: reorder, reword, squash and drop', () async {
+      final base = (await cli.snapshot(repo)).headSha!;
+      await commitFile('1.txt', '1\n', 'one');
+      await commitFile('2.txt', '2\n', 'two');
+      await commitFile('3.txt', '3\n', 'three');
+      await commitFile('4.txt', '4\n', 'four');
+
+      final commits = await cli.commitsForRebase(repo, base);
+      expect(commits.map((c) => c.subject), ['one', 'two', 'three', 'four']);
+      RebaseStep step(int i, [RebaseStepAction a = RebaseStepAction.pick, String? msg]) =>
+          RebaseStep(sha: commits[i].sha, subject: commits[i].subject, action: a, message: msg);
+
+      await act(InteractiveRebaseAction(base, [
+        step(2), // three primero
+        step(0, RebaseStepAction.reword, "one (it's renamed)"),
+        step(3, RebaseStepAction.fixup), // four se une a one, sin su mensaje
+        step(1, RebaseStepAction.drop),
+      ]));
+
+      final after = await cli.commitsForRebase(repo, base);
+      expect(after.map((c) => c.subject), ['three', "one (it's renamed)"]);
+      expect(await File('$repo/4.txt').exists(), isTrue);
+      expect(await File('$repo/2.txt').exists(), isFalse);
+      expect(after.first.authorName, 'Test User');
+      expect((await cli.snapshot(repo)).pendingOperation, PendingOperation.none);
+    });
+
+    test('interactive rebase refuses to squash the first commit', () async {
+      final base = (await cli.snapshot(repo)).headSha!;
+      await commitFile('1.txt', '1\n', 'one');
+      final c = (await cli.commitsForRebase(repo, base)).single;
+      await expectLater(
+        act(InteractiveRebaseAction(base, [RebaseStep(sha: c.sha, subject: c.subject, action: RebaseStepAction.squash)])),
+        throwsA(isA<GitCommandException>()),
+      );
+    });
+
+    test('checks out pull requests from the same repo and from forks', () async {
+      final remote = '${tmp.path}/remote.git';
+      await runner.run(['init', '-q', '--bare', '-b', 'main', remote], workingDirectory: tmp.path);
+      await runner.run(['remote', 'add', 'origin', remote], workingDirectory: repo);
+      await act(const PushAction());
+
+      // Otra persona sube una rama, y GitHub expone las PR de forks en refs/pull/N/head.
+      final parent = await Directory('${tmp.path}/other').create();
+      final other = await cli.clone(remote, parent.path, identity);
+      await File('$other/pr.txt').writeAsString('pr\n');
+      await cli.run(other, const CreateBranchAction('feature/pr'), identity);
+      await cli.run(other, const StageAllAction(), identity);
+      await cli.run(other, const CommitAction('pr work'), identity);
+      await cli.run(other, const PushAction(), identity);
+      await runner.run(['push', 'origin', 'HEAD:refs/pull/7/head'], workingDirectory: other);
+
+      await act(const CheckoutPullRequestAction(number: 3, headRef: 'feature/pr', sameRepo: true));
+      var snap = await cli.snapshot(repo);
+      expect(snap.currentBranch, 'feature/pr');
+      expect(snap.currentRef?.upstream, 'origin/feature/pr');
+
+      await act(const CheckoutAction('main'));
+      await act(const CheckoutPullRequestAction(number: 7, headRef: 'whatever', sameRepo: false));
+      snap = await cli.snapshot(repo);
+      expect(snap.currentBranch, 'pr/7');
+      expect(await File('$repo/pr.txt').exists(), isTrue);
+
+      expect(await cli.remoteUrl(repo), remote);
     });
   });
 }

@@ -34,6 +34,11 @@ Click an account card to open its **workspace**: your projects in tabs (remember
 - **Toolbar**: Pull (merge or **rebase**, from the ▾ menu), Push (sets upstream automatically on first push; offers force-with-lease if rejected), Fetch, Branch, Stash, Pop — with ahead/behind counters. Click the branch name to switch branches. The layout adapts to narrow windows (icon-only toolbar, collapsible sidebar, fewer graph columns).
 - **Rebase**: rebase the current branch onto any branch, tag or commit, or rebase another branch onto the current one (right-click in the sidebar or the graph), or **drag a branch onto another** in the sidebar to merge or rebase. Local changes are auto-stashed. On conflicts a banner shows the progress (*step 2/5*) with **Continue**, **Skip** and **Abort**.
 - **Search** the history by message, author, SHA or branch (`Enter` jumps to the next match).
+- **Partial staging**: stage, unstage or discard a single **hunk** from the diff, or click the line gutter to select individual lines (`Shift`+click for a range) and stage / unstage / discard just those.
+- **Conflict editor**: conflicted files open side by side — *Current* vs *Incoming* — with *Use current*, *Use incoming*, *Both*, *All current / All incoming* and *Mark resolved*; no external editor needed (diff3-style markers and CRLF files supported).
+- **Merge modes**: regular merge, *create merge commit* (`--no-ff`, keeps the merge bubble visible) and *squash* (all changes as one commit), from the sidebar menu or by dragging a branch onto another.
+- **Interactive rebase**: right-click a commit (*from here*) or a branch (*onto …*) to reorder commits by dragging and **pick / reword / squash / fixup / drop** each one.
+- **GitHub pull requests**: the *Pull requests* section lists the open PRs of `origin` with their CI status (✅ / ❌ / ⏳), lets you check one out (forks included) or open it on GitHub, and the **PR** button creates one from the current branch (pushing it first if needed, optional draft).
 - **Sidebar**: local branches, remotes, tags and stashes, with a filter. Right-click for merge, push, delete (local or remote), push tag, apply/pop/drop stash.
 - **Staging & commit**: unstaged/staged lists, stage/unstage/discard per file or all, commit message + description, amend, `Ctrl+Enter` to commit. Merge/cherry-pick conflicts are flagged with an *Abort* option.
 - **Diff & code viewer**: unified or side-by-side diffs and a full-file view, with line numbers and syntax highlighting — for local changes and for any commit.
@@ -62,6 +67,8 @@ When you generate a Personal Access Token at `github.com/settings/tokens`, make 
 
 - **`repo`** scope (classic token) — required for `clone`/`push`/`pull`, not just for reading your profile.
 - **`read:user`** and **`user:email`** — used to fetch your name, avatar, and email for the account card and commit identity.
+
+For pull requests, a classic token with **`repo`** is enough. A fine-grained token also needs **Pull requests: Read and write**, plus **Commit statuses** and **Checks: Read** to show CI results.
 
 If you use a **fine-grained token** instead, make sure the repository (or "all repositories") is selected **and** that **Contents** is granted (Read, or Read and write if you plan to push). GitHub's fine-grained tokens separate "see this repo exists" (metadata, granted by default) from "read/write its contents" — missing the latter produces a confusing `403 Write access to repository not granted` error even on a plain `clone`.
 

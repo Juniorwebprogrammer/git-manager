@@ -1,11 +1,14 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../domain/entities/file_diff.dart';
 import '../../domain/entities/git_action.dart';
+import '../../domain/patch/patch_builder.dart';
 import '../../domain/repositories/git_repository.dart';
 import '../state/repo_notifier.dart';
 import 'code_highlighter.dart';
+import 'conflict_editor.dart';
 import 'ui_helpers.dart';
 
 enum _ViewMode { unified, split, file }
@@ -41,6 +44,9 @@ class _DiffViewerState extends ConsumerState<DiffViewer> {
       );
     }
 
+    // Ficheros en conflicto: editor de conflictos en lugar del diff.
+    if (target.conflicted) return ConflictEditor(repo: widget.repo, target: target);
+
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
@@ -68,10 +74,81 @@ class _DiffViewerState extends ConsumerState<DiffViewer> {
     if (diff == null) return const Center(child: CircularProgressIndicator());
     if (diff.isBinary) return const _Notice('Binary file changed — no text diff to show.');
     if (diff.hunks.isEmpty) return const _Notice('No textual changes (mode or whitespace-only change).');
+    final partial = target.supportsPartialStaging ? _applyPartial : null;
     return _mode == _ViewMode.split
-        ? _SplitDiff(diff: diff, highlighter: highlighter)
-        : _UnifiedDiff(diff: diff, highlighter: highlighter);
+        ? _SplitDiff(diff: diff, highlighter: highlighter, source: target.source, onPartial: partial)
+        : _UnifiedDiff(diff: diff, highlighter: highlighter, source: target.source, onPartial: partial);
   }
+
+  /// Stage / unstage / descarte de un hunk entero ([selected] = null) o de
+  /// unas líneas concretas.
+  Future<void> _applyPartial(DiffHunk hunk, Set<int>? selected, PatchTarget kind, {bool confirm = true}) async {
+    final target = ref.read(repoNotifierProvider(widget.repo)).openFile;
+    if (target == null) return;
+    if (kind == PatchTarget.discard && confirm) {
+      final ok = await confirmDialog(
+        context,
+        title: selected == null ? 'Discard hunk' : 'Discard selected lines',
+        message: 'These changes will be removed from "${target.path}". This cannot be undone.',
+        confirmLabel: 'Discard',
+        destructive: true,
+      );
+      if (!ok || !mounted) return;
+    }
+    final patch = buildPartialPatch(
+      path: target.path,
+      hunk: hunk,
+      selected: selected,
+      reverse: kind != PatchTarget.stage,
+    );
+    if (patch == null) return;
+    await runGitAction(context, ref, widget.repo, ApplyPatchAction(patch, kind));
+  }
+}
+
+typedef _PartialCallback =
+    Future<void> Function(DiffHunk hunk, Set<int>? selected, PatchTarget kind, {bool confirm});
+
+/// Botones de stage/unstage/descartar de un hunk. [compact] = solo iconos.
+List<Widget> Function(bool compact) _hunkActions(DiffSource source, DiffHunk hunk, _PartialCallback? onPartial) {
+  return (compact) {
+    if (onPartial == null || !hunk.hasChanges) return const <Widget>[];
+    Widget button(String label, IconData icon, PatchTarget kind, {bool danger = false}) => Builder(
+          builder: (context) {
+            final color = danger ? Theme.of(context).colorScheme.error : null;
+            void onPressed() => onPartial(hunk, null, kind);
+            return Tooltip(
+              message: label,
+              child: compact
+                  ? IconButton(
+                      onPressed: onPressed,
+                      icon: Icon(icon, size: 16, color: color),
+                      visualDensity: VisualDensity.compact,
+                      padding: EdgeInsets.zero,
+                      constraints: const BoxConstraints(minWidth: 28, minHeight: 28),
+                    )
+                  : TextButton.icon(
+                      onPressed: onPressed,
+                      icon: Icon(icon, size: 15),
+                      label: Text(label),
+                      style: TextButton.styleFrom(
+                        visualDensity: VisualDensity.compact,
+                        textStyle: Theme.of(context).textTheme.labelMedium,
+                        foregroundColor: color,
+                      ),
+                    ),
+            );
+          },
+        );
+    return switch (source) {
+      DiffSource.unstaged => [
+          button('Discard hunk', Icons.delete_outline, PatchTarget.discard, danger: true),
+          button('Stage hunk', Icons.add, PatchTarget.stage),
+        ],
+      DiffSource.staged => [button('Unstage hunk', Icons.remove, PatchTarget.unstage)],
+      DiffSource.commit => const <Widget>[],
+    };
+  };
 }
 
 class _Notice extends StatelessWidget {
@@ -277,56 +354,174 @@ class _Gutter extends StatelessWidget {
 class _HunkHeader extends StatelessWidget {
   final String text;
   final _DiffColors colors;
+  final List<Widget> Function(bool compact)? actions;
 
-  const _HunkHeader(this.text, this.colors);
+  const _HunkHeader(this.text, this.colors, {this.actions});
 
   @override
-  Widget build(BuildContext context) => Container(
-    color: colors.hunkBg,
-    padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
-    child: Text(text, style: monoStyle(context, size: 12, color: Theme.of(context).colorScheme.primary)),
-  );
+  Widget build(BuildContext context) => LayoutBuilder(builder: (context, constraints) {
+        final buttons = actions?.call(constraints.maxWidth < 520) ?? const <Widget>[];
+        return Container(
+          color: colors.hunkBg,
+          padding: EdgeInsets.fromLTRB(12, buttons.isEmpty ? 4 : 0, 4, buttons.isEmpty ? 4 : 0),
+          child: Row(
+            children: [
+              Expanded(
+                child: Text(
+                  text,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: monoStyle(context, size: 12, color: Theme.of(context).colorScheme.primary),
+                ),
+              ),
+              ...buttons,
+            ],
+          ),
+        );
+      });
 }
 
-class _UnifiedDiff extends StatelessWidget {
+class _UnifiedDiff extends StatefulWidget {
   final FileDiff diff;
   final CodeHighlighter highlighter;
+  final DiffSource source;
+  final _PartialCallback? onPartial;
 
-  const _UnifiedDiff({required this.diff, required this.highlighter});
+  const _UnifiedDiff({required this.diff, required this.highlighter, required this.source, this.onPartial});
+
+  @override
+  State<_UnifiedDiff> createState() => _UnifiedDiffState();
+}
+
+class _UnifiedDiffState extends State<_UnifiedDiff> {
+  /// Líneas seleccionadas: índice de hunk → índices de línea.
+  final Map<int, Set<int>> _selected = {};
+  (int, int)? _anchor;
+
+  @override
+  void didUpdateWidget(_UnifiedDiff old) {
+    super.didUpdateWidget(old);
+    if (!identical(old.diff, widget.diff)) {
+      _selected.clear();
+      _anchor = null;
+    }
+  }
+
+  int get _count => _selected.values.fold(0, (n, s) => n + s.length);
+
+  bool _isChange(DiffLine l) => l.type == DiffLineType.added || l.type == DiffLineType.removed;
+
+  void _toggle(int hunk, int line) {
+    final lines = widget.diff.hunks[hunk].lines;
+    setState(() {
+      final anchor = _anchor;
+      if (HardwareKeyboard.instance.isShiftPressed && anchor != null && anchor.$1 == hunk) {
+        // Mayús+clic: selecciona el rango dentro del mismo hunk.
+        final from = anchor.$2 < line ? anchor.$2 : line;
+        final to = anchor.$2 < line ? line : anchor.$2;
+        final set = _selected.putIfAbsent(hunk, () => {});
+        for (var i = from; i <= to; i++) {
+          if (_isChange(lines[i])) set.add(i);
+        }
+      } else {
+        final set = _selected.putIfAbsent(hunk, () => {});
+        if (!set.remove(line)) set.add(line);
+        if (set.isEmpty) _selected.remove(hunk);
+        _anchor = (hunk, line);
+      }
+    });
+  }
+
+  Future<void> _applySelection(PatchTarget kind) async {
+    final onPartial = widget.onPartial;
+    if (onPartial == null || _selected.isEmpty) return;
+    // Un parche por hunk; se aplican de abajo arriba para no desplazar
+    // las posiciones de los que quedan.
+    final entries = _selected.entries.toList()..sort((a, b) => b.key.compareTo(a.key));
+    if (kind == PatchTarget.discard) {
+      final ok = await confirmDialog(
+        context,
+        title: 'Discard selected lines',
+        message: 'The selected changes ($_count lines) will be removed from the file. This cannot be undone.',
+        confirmLabel: 'Discard',
+        destructive: true,
+      );
+      if (!ok || !mounted) return;
+    }
+    final hunks = [for (final e in entries) (widget.diff.hunks[e.key], {...e.value})];
+    setState(_selected.clear);
+    for (final (hunk, lines) in hunks) {
+      await onPartial(hunk, lines, kind, confirm: false);
+      if (!mounted) return;
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
-    final colors = _DiffColors(Theme.of(context));
-    final rows = <Object>[
-      for (final h in diff.hunks) ...[h.header, ...h.lines],
+    final theme = Theme.of(context);
+    final colors = _DiffColors(theme);
+    final rows = <(int, int)>[
+      for (var h = 0; h < widget.diff.hunks.length; h++) ...[
+        (h, -1),
+        for (var l = 0; l < widget.diff.hunks[h].lines.length; l++) (h, l),
+      ],
     ];
     final base = monoStyle(context);
     final gutter = monoStyle(context, size: 11.5, color: colors.gutterText);
+    final selectable = widget.onPartial != null;
+    final selectionColor = theme.colorScheme.primary.withValues(alpha: 0.28);
 
-    return SelectionArea(
+    final list = SelectionArea(
       child: ListView.builder(
         itemCount: rows.length,
         itemBuilder: (context, i) {
-          final row = rows[i];
-          if (row is String) return _HunkHeader(row, colors);
-          final line = row as DiffLine;
+          final (h, l) = rows[i];
+          final hunk = widget.diff.hunks[h];
+          if (l == -1) {
+            return _HunkHeader(hunk.header, colors, actions: _hunkActions(widget.source, hunk, widget.onPartial));
+          }
+          final line = hunk.lines[l];
+          final selected = _selected[h]?.contains(l) ?? false;
           final (bg, gut, sign) = switch (line.type) {
             DiffLineType.added => (colors.addBg, colors.addGutter, '+'),
             DiffLineType.removed => (colors.delBg, colors.delGutter, '−'),
             _ => (null, null, ' '),
           };
+          Widget gutterArea = Row(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              _Gutter(line.oldNumber, gutter, color: selected ? selectionColor : gut),
+              _Gutter(line.newNumber, gutter, color: selected ? selectionColor : gut),
+              SizedBox(
+                width: 18,
+                child: Text(sign, textAlign: TextAlign.center, style: base),
+              ),
+            ],
+          );
+          if (selectable && _isChange(line)) {
+            gutterArea = MouseRegion(
+              cursor: SystemMouseCursors.click,
+              child: Tooltip(
+                message: 'Click to select this line (Shift+click for a range)',
+                waitDuration: const Duration(seconds: 1),
+                child: GestureDetector(
+                  behavior: HitTestBehavior.opaque,
+                  onTap: () => _toggle(h, l),
+                  child: gutterArea,
+                ),
+              ),
+            );
+          }
           return Container(
-            color: bg,
+            decoration: BoxDecoration(
+              color: bg,
+              border: selected ? Border(left: BorderSide(color: theme.colorScheme.primary, width: 3)) : null,
+            ),
             child: IntrinsicHeight(
               child: Row(
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
-                  _Gutter(line.oldNumber, gutter, color: gut),
-                  _Gutter(line.newNumber, gutter, color: gut),
-                  SizedBox(
-                    width: 18,
-                    child: Text(sign, textAlign: TextAlign.center, style: base),
-                  ),
+                  gutterArea,
                   Expanded(
                     child: line.type == DiffLineType.meta
                         ? Text(
@@ -342,20 +537,85 @@ class _UnifiedDiff extends StatelessWidget {
         },
       ),
     );
+
+    if (_count == 0) return list;
+    return Column(
+      children: [
+        Expanded(child: list),
+        _SelectionBar(
+          count: _count,
+          source: widget.source,
+          onClear: () => setState(_selected.clear),
+          onApply: _applySelection,
+        ),
+      ],
+    );
+  }
+
+  CodeHighlighter get highlighter => widget.highlighter;
+}
+
+class _SelectionBar extends StatelessWidget {
+  final int count;
+  final DiffSource source;
+  final VoidCallback onClear;
+  final ValueChanged<PatchTarget> onApply;
+
+  const _SelectionBar({required this.count, required this.source, required this.onClear, required this.onApply});
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final noun = '$count line${count == 1 ? '' : 's'}';
+    return Container(
+      color: theme.colorScheme.primaryContainer,
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+      child: Wrap(
+        alignment: WrapAlignment.end,
+        crossAxisAlignment: WrapCrossAlignment.center,
+        spacing: 8,
+        runSpacing: 4,
+        children: [
+          Text('$noun selected', style: theme.textTheme.bodyMedium?.copyWith(color: theme.colorScheme.onPrimaryContainer)),
+          TextButton(onPressed: onClear, child: const Text('Clear')),
+          if (source == DiffSource.unstaged) ...[
+            TextButton.icon(
+              onPressed: () => onApply(PatchTarget.discard),
+              icon: const Icon(Icons.delete_outline, size: 16),
+              label: Text('Discard $noun'),
+              style: TextButton.styleFrom(foregroundColor: theme.colorScheme.error),
+            ),
+            FilledButton.icon(
+              onPressed: () => onApply(PatchTarget.stage),
+              icon: const Icon(Icons.add, size: 16),
+              label: Text('Stage $noun'),
+            ),
+          ],
+          if (source == DiffSource.staged)
+            FilledButton.icon(
+              onPressed: () => onApply(PatchTarget.unstage),
+              icon: const Icon(Icons.remove, size: 16),
+              label: Text('Unstage $noun'),
+            ),
+        ],
+      ),
+    );
   }
 }
 
 class _SplitDiff extends StatelessWidget {
   final FileDiff diff;
   final CodeHighlighter highlighter;
+  final DiffSource source;
+  final _PartialCallback? onPartial;
 
-  const _SplitDiff({required this.diff, required this.highlighter});
+  const _SplitDiff({required this.diff, required this.highlighter, required this.source, this.onPartial});
 
   /// Empareja bloques de líneas borradas/añadidas para verlas lado a lado.
   List<Object> _pairs() {
     final rows = <Object>[];
     for (final hunk in diff.hunks) {
-      rows.add(hunk.header);
+      rows.add(hunk);
       final removed = <DiffLine>[];
       final added = <DiffLine>[];
       void flush() {
@@ -419,7 +679,9 @@ class _SplitDiff extends StatelessWidget {
         itemCount: rows.length,
         itemBuilder: (context, i) {
           final row = rows[i];
-          if (row is String) return _HunkHeader(row, colors);
+          if (row is DiffHunk) {
+            return _HunkHeader(row.header, colors, actions: _hunkActions(source, row, onPartial));
+          }
           final (left, right) = row as (DiffLine?, DiffLine?);
           return IntrinsicHeight(
             child: Row(

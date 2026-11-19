@@ -10,6 +10,7 @@ import '../../domain/entities/git_commit.dart';
 import '../../domain/graph/commit_graph.dart';
 import '../../domain/repositories/git_repository.dart';
 import '../state/repo_notifier.dart';
+import 'interactive_rebase_dialog.dart';
 import 'ui_helpers.dart';
 
 const _rowHeight = 30.0;
@@ -384,6 +385,7 @@ class _CommitRow extends ConsumerWidget {
       if (currentBranch != null && !isHead) ...[
         menuItem('merge', Icons.merge, 'Merge this commit into $currentBranch'),
         menuItem('rebase', Icons.low_priority, 'Rebase $currentBranch onto this commit'),
+        menuItem('irebase', Icons.reorder, 'Interactive rebase $currentBranch from here…'),
       ],
       menuItem('cherry', Icons.colorize_outlined, 'Cherry-pick commit'),
       menuItem('revert', Icons.undo, 'Revert commit'),
@@ -419,6 +421,9 @@ class _CommitRow extends ConsumerWidget {
         await runGitAction(context, ref, repo, MergeAction(sha), successMessage: 'Merged ${commit.shortSha}');
       case 'rebase':
         await confirmAndRebase(context, ref, repo, onto: sha, ontoLabel: commit.shortSha, branchLabel: currentBranch!);
+      case 'irebase':
+        await showInteractiveRebaseDialog(context, ref, repo,
+            base: sha, baseLabel: commit.shortSha, branchLabel: currentBranch!);
       case 'cherry':
         await runGitAction(
           context,

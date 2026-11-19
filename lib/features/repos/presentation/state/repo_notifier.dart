@@ -3,7 +3,9 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../../../core/di/providers.dart';
 import '../../../../core/error/app_failure.dart';
 import '../../../../core/error/result.dart';
+import '../../domain/entities/file_change.dart';
 import '../../domain/entities/file_diff.dart';
+import '../../domain/entities/pull_request.dart';
 import '../../domain/entities/git_action.dart';
 import '../../domain/entities/git_commit.dart';
 import '../../domain/entities/repo_snapshot.dart';
@@ -155,10 +157,21 @@ class RepoNotifier extends Notifier<RepoState> {
       }
       state = next;
 
-      // Si el diff abierto es de cambios locales, puede haber cambiado.
+      // Si el diff abierto es de cambios locales, puede haber cambiado... o
+      // haber desaparecido de la lista (p. ej. al hacer stage de todo).
       final open = state.openFile;
       if (open != null && open.source != DiffSource.commit) {
-        await _loadDiff(open, keepContent: false, silent: true);
+        final list = open.source == DiffSource.staged ? snapshot.staged : snapshot.unstaged;
+        final change = list.where((c) => c.path == open.path).firstOrNull;
+        if (change == null) {
+          closeFile();
+        } else {
+          final conflicted = change.type == ChangeType.conflicted;
+          final target = conflicted == open.conflicted
+              ? open
+              : DiffTarget(source: open.source, path: open.path, oldPath: open.oldPath, conflicted: conflicted);
+          await _loadDiff(target, keepContent: true, silent: true);
+        }
       }
     } finally {
       _refreshing = false;
@@ -203,12 +216,20 @@ class RepoNotifier extends Notifier<RepoState> {
       diff: sameFile ? state.diff : null,
       fileContent: keepContent && sameFile ? state.fileContent : null,
     );
+    final hadContent = state.fileContent != null;
     final result = await _git.loadDiff(repo, target);
     if (!ref.mounted || request != _diffRequest) return;
     state = switch (result) {
       Success(:final value) => state.copyWith(diff: value, diffLoading: false),
       Failure(:final failure) => state.copyWith(diffError: failure, diffLoading: false),
     };
+    // En un refresco silencioso, el contenido completo se actualiza sin
+    // vaciarlo antes (evita parpadeos en la vista "File" y en conflictos).
+    if (silent && keepContent && hadContent) {
+      final content = await _git.loadFileContent(repo, target);
+      if (!ref.mounted || request != _diffRequest) return;
+      if (content case Success(:final value)) state = state.copyWith(fileContent: value);
+    }
   }
 
   /// Carga el fichero completo (pestaña "File" del visor).
@@ -250,4 +271,21 @@ class RepoNotifier extends Notifier<RepoState> {
       Success() => null,
     };
   }
+}
+
+/// Pull Requests abiertas del repo (en GitHub). `ref.invalidate` para
+/// recargarlas.
+final pullRequestsProvider = FutureProvider.family<List<PullRequest>, RepoHandle>((ref, repo) async {
+  final result = await ref.read(gitRepositoryProvider).listPullRequests(repo);
+  return switch (result) {
+    Success(:final value) => value,
+    Failure(:final failure) => throw PullRequestsException(failure.message),
+  };
+});
+
+class PullRequestsException implements Exception {
+  final String message;
+  const PullRequestsException(this.message);
+  @override
+  String toString() => message;
 }

@@ -7,6 +7,7 @@ import '../../domain/entities/git_action.dart';
 import '../../domain/entities/repo_snapshot.dart';
 import '../../domain/repositories/git_repository.dart';
 import '../state/repo_notifier.dart';
+import 'pull_request_dialog.dart';
 import 'ui_helpers.dart';
 
 /// Barra de acciones principal: rama actual, pull, push, fetch, stash…
@@ -126,6 +127,15 @@ class RepoToolbar extends ConsumerWidget {
                     tooltip: 'Create branch',
                     compact: compact,
                     onPressed: busy || snapshot?.headSha == null ? null : newBranch,
+                  ),
+                  _ToolButton(
+                    icon: Icons.merge_type,
+                    label: 'PR',
+                    tooltip: 'Create pull request',
+                    compact: compact,
+                    onPressed: busy || !hasRemote || snapshot?.currentBranch == null
+                        ? null
+                        : () => showCreatePullRequestDialog(context, ref, repo),
                   ),
                   _ToolButton(
                     icon: Icons.archive_outlined,

@@ -268,8 +268,20 @@ class GitCliDataSource {
         await git(['branch', force ? '-D' : '-d', name]);
       case DeleteRemoteBranchAction(:final remote, :final branch):
         await git(['push', remote, '--delete', branch]);
-      case MergeAction(:final ref):
-        await git(['merge', '--no-edit', ref]);
+      case MergeAction(:final ref, :final mode):
+        await git(['merge', '--no-edit', if (mode == MergeMode.noFastForward) '--no-ff', ref]);
+      case SquashMergeAction(:final ref, :final message):
+        await git(['merge', '--squash', ref]);
+        await git(['commit', '-m', message]);
+      case ApplyPatchAction(:final patch, :final target):
+        await _applyPatch(path, patch, target, identity);
+      case ResolveConflictAction(path: final file, :final content):
+        if (content != null) await File(p.join(path, file)).writeAsString(content);
+        await git(['add', '--', file]);
+      case CheckoutPullRequestAction(:final number, :final headRef, :final sameRepo):
+        await _checkoutPullRequest(path, identity, number: number, headRef: headRef, sameRepo: sameRepo);
+      case InteractiveRebaseAction(:final base, :final steps):
+        await _interactiveRebase(path, identity, base, steps);
       case StashAction(:final message):
         await git(['stash', 'push', '--include-untracked', if (message != null && message.isNotEmpty) ...['-m', message]]);
       case StashPopAction(:final ref):
@@ -357,6 +369,121 @@ class GitCliDataSource {
       await _git.run(['push', ...forceArgs, '-u', await _defaultRemote(path), name],
           workingDirectory: path, identity: identity);
     }
+  }
+
+  Future<void> _applyPatch(String path, String patch, PatchTarget target, GitIdentity identity) async {
+    final dir = await Directory.systemTemp.createTemp('gitmanager_patch_');
+    try {
+      final file = File(p.join(dir.path, 'selection.patch'));
+      await file.writeAsString(patch);
+      await _git.run([
+        'apply',
+        if (target != PatchTarget.discard) '--cached',
+        if (target != PatchTarget.stage) '-R',
+        '--recount',
+        '--whitespace=nowarn',
+        file.path,
+      ], workingDirectory: path, identity: identity);
+    } finally {
+      await dir.delete(recursive: true);
+    }
+  }
+
+  Future<void> _checkoutPullRequest(
+    String path,
+    GitIdentity identity, {
+    required int number,
+    required String headRef,
+    required bool sameRepo,
+  }) async {
+    Future<String> git(List<String> args) => _git.run(args, workingDirectory: path, identity: identity);
+    final remote = await _defaultRemote(path);
+    final current = (await _git.tryRun(['symbolic-ref', '-q', '--short', 'HEAD'], workingDirectory: path)).stdout.trim();
+
+    if (sameRepo) {
+      // Rama del propio repo: rama local con seguimiento, como cualquier otra.
+      await git(['fetch', remote, '+refs/heads/$headRef:refs/remotes/$remote/$headRef']);
+      final exists = await _git.tryRun(['rev-parse', '-q', '--verify', 'refs/heads/$headRef'], workingDirectory: path);
+      if (!exists.ok) {
+        await git(['switch', '-c', headRef, '--track', '$remote/$headRef']);
+      } else if (current != headRef) {
+        await git(['switch', headRef]);
+      }
+      return;
+    }
+
+    // PR desde un fork: se trae refs/pull/N/head a una rama local pr/N.
+    final local = 'pr/$number';
+    await git(['fetch', remote, 'pull/$number/head']);
+    if (current == local) {
+      await git(['merge', '--ff-only', 'FETCH_HEAD']);
+    } else {
+      await git(['switch', '-C', local, 'FETCH_HEAD']);
+    }
+  }
+
+  Future<List<GitCommit>> commitsForRebase(String path, String base) async {
+    final out = await _git.run(
+      ['log', '--reverse', '--no-merges', '--decorate=full', '--format=$logFormat', '$base..HEAD'],
+      workingDirectory: path,
+    );
+    return parseLog(out);
+  }
+
+  Future<String> remoteUrl(String path) async {
+    final remote = await _defaultRemote(path);
+    return (await _git.run(['remote', 'get-url', remote], workingDirectory: path)).trim();
+  }
+
+  Future<void> _interactiveRebase(String path, GitIdentity identity, String base, List<RebaseStep> steps) async {
+    final kept = steps.where((s) => s.action != RebaseStepAction.drop).toList();
+    if (kept.isEmpty) {
+      throw const GitCommandException('Keep at least one commit (or use a reset instead of dropping them all).');
+    }
+    if (kept.first.action == RebaseStepAction.squash || kept.first.action == RebaseStepAction.fixup) {
+      throw const GitCommandException('The first commit cannot be squashed: there is no previous commit to join.');
+    }
+
+    // Los ficheros viven en .git: si el rebase se para por un conflicto,
+    // las líneas `exec` los siguen necesitando al hacer "Continue".
+    final gitDir = (await _git.run(['rev-parse', '--absolute-git-dir'], workingDirectory: path)).trim();
+    final dir = Directory(p.join(gitDir, 'gitmanager-rebase'));
+    if (await dir.exists()) await dir.delete(recursive: true);
+    await dir.create();
+
+    String quote(String s) => "'${s.replaceAll("'", "'\\''")}'";
+
+    final todo = StringBuffer();
+    for (var i = 0; i < steps.length; i++) {
+      final step = steps[i];
+      switch (step.action) {
+        case RebaseStepAction.pick:
+          todo.writeln('pick ${step.sha}');
+        case RebaseStepAction.drop:
+          todo.writeln('drop ${step.sha}');
+        case RebaseStepAction.squash:
+          todo.writeln('squash ${step.sha}');
+        case RebaseStepAction.fixup:
+          todo.writeln('fixup ${step.sha}');
+        case RebaseStepAction.reword:
+          // pick + amend con el mensaje nuevo (GIT_EDITOR no es interactivo).
+          final message = File(p.join(dir.path, 'message_$i.txt'));
+          await message.writeAsString(step.message ?? step.subject);
+          todo
+            ..writeln('pick ${step.sha}')
+            ..writeln('exec git commit --amend --allow-empty --no-verify -F ${quote(message.path)}');
+      }
+    }
+    final todoFile = File(p.join(dir.path, 'todo'));
+    await todoFile.writeAsString(todo.toString());
+
+    await _git.run(
+      ['rebase', '-i', '--autostash', base],
+      workingDirectory: path,
+      identity: identity,
+      extraEnvironment: {'GIT_SEQUENCE_EDITOR': 'cp ${quote(todoFile.path)}'},
+    );
+    await dir.delete(recursive: true);
   }
 
   Future<String> clone(String url, String parentDirectory, GitIdentity identity) async {

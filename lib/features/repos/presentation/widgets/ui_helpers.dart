@@ -299,3 +299,17 @@ Future<void> confirmAndRebase(
   await runGitAction(context, ref, repo, RebaseAction(onto, branch: branch),
       successMessage: 'Rebased $branchLabel onto ${ontoLabel ?? onto}');
 }
+
+/// Pide el mensaje y hace `merge --squash` de [source] en la rama actual.
+Future<void> squashMergeInto(BuildContext context, WidgetRef ref, RepoHandle repo, String source, String into) async {
+  final message = await promptDialog(
+    context,
+    title: 'Squash $source into $into',
+    label: 'Commit message',
+    initial: 'Squash merge $source',
+    helper: 'All changes from $source become a single new commit on $into.',
+    confirmLabel: 'Squash',
+  );
+  if (message == null || !context.mounted) return;
+  await runGitAction(context, ref, repo, SquashMergeAction(source, message), successMessage: 'Squashed $source into $into');
+}

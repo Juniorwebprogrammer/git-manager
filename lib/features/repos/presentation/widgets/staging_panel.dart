@@ -106,6 +106,7 @@ class _StagingPanelState extends ConsumerState<StagingPanel> {
                     source: DiffSource.unstaged,
                     path: c.path,
                     untracked: c.type == ChangeType.untracked,
+                    conflicted: c.type == ChangeType.conflicted,
                     deleted: c.type == ChangeType.deleted,
                   ),
                 ),

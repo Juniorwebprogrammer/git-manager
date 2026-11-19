@@ -7,6 +7,7 @@ import '../../../accounts/data/datasources/github_remote_data_source.dart';
 import '../../domain/entities/file_diff.dart';
 import '../../domain/entities/git_action.dart';
 import '../../domain/entities/git_commit.dart';
+import '../../domain/entities/pull_request.dart';
 import '../../domain/entities/remote_repository.dart';
 import '../../domain/entities/repo_snapshot.dart';
 import '../../domain/repositories/git_repository.dart';
@@ -16,7 +17,7 @@ import '../datasources/workspace_local_data_source.dart';
 class GitRepositoryImpl implements GitRepository {
   final GitCliDataSource _cli;
   final AccountLocalDataSource _accounts;
-  final GitHubRemoteDataSource _github;
+  final GitHubRemoteDataSource _githubApi;
 
   GitRepositoryImpl({
     required GitCliDataSource cli,
@@ -24,7 +25,7 @@ class GitRepositoryImpl implements GitRepository {
     required GitHubRemoteDataSource github,
   })  : _cli = cli,
         _accounts = accounts,
-        _github = github;
+        _githubApi = github;
 
   /// El token vive solo aquí, en la capa de datos.
   Future<GitIdentity> _identity(String accountId) async {
@@ -84,9 +85,60 @@ class GitRepositoryImpl implements GitRepository {
       });
 
   @override
+  Future<Result<List<GitCommit>>> loadCommitsForRebase(RepoHandle repo, String base) =>
+      _guard(() => _cli.commitsForRebase(repo.path, base));
+
+  Future<({GitIdentity identity, GitHubRepoInfo info})> _github(RepoHandle repo) async {
+    final url = await _cli.remoteUrl(repo.path);
+    final parsed = parseGitHubRemote(url);
+    if (parsed == null) {
+      throw GitCommandException('The remote "$url" is not a GitHub repository.');
+    }
+    final identity = await _identity(repo.accountId);
+    final info = await _githubApi.fetchRepoInfo(identity.token, parsed.owner, parsed.name);
+    return (identity: identity, info: info);
+  }
+
+  @override
+  Future<Result<GitHubRepoInfo>> githubRepoInfo(RepoHandle repo) => _guard(() async => (await _github(repo)).info);
+
+  @override
+  Future<Result<List<PullRequest>>> listPullRequests(RepoHandle repo) => _guard(() async {
+        final gh = await _github(repo);
+        final token = gh.identity.token;
+        final pulls = await _githubApi.fetchOpenPullRequests(token, gh.info.owner, gh.info.name);
+        return Future.wait(pulls.map((pr) async => pr.copyWith(
+              ci: await _githubApi.fetchCiStatus(token, gh.info.owner, gh.info.name, pr.headSha),
+            )));
+      });
+
+  @override
+  Future<Result<PullRequest>> createPullRequest(
+    RepoHandle repo, {
+    required String title,
+    required String head,
+    required String base,
+    String body = '',
+    bool draft = false,
+  }) =>
+      _guard(() async {
+        final gh = await _github(repo);
+        return _githubApi.createPullRequest(
+          gh.identity.token,
+          gh.info.owner,
+          gh.info.name,
+          title: title,
+          head: head,
+          base: base,
+          body: body,
+          draft: draft,
+        );
+      });
+
+  @override
   Future<Result<List<RemoteRepository>>> listRemoteRepositories(String accountId) => _guard(() async {
         final identity = await _identity(accountId);
-        return _github.fetchRepositories(identity.token);
+        return _githubApi.fetchRepositories(identity.token);
       });
 
   @override

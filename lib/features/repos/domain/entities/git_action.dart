@@ -93,11 +93,104 @@ class DeleteRemoteBranchAction extends GitAction {
   bool get isNetwork => true;
 }
 
+enum MergeMode {
+  /// Fast-forward si se puede; si no, commit de merge (lo normal en git).
+  auto,
+
+  /// Siempre crea commit de merge (`--no-ff`), como las PR de GitHub.
+  noFastForward,
+}
+
 class MergeAction extends GitAction {
   final String ref;
-  const MergeAction(this.ref);
+  final MergeMode mode;
+  const MergeAction(this.ref, {this.mode = MergeMode.auto});
   @override
   String get label => 'Merging $ref…';
+}
+
+/// `merge --squash` + commit: los cambios de [ref] en un único commit.
+class SquashMergeAction extends GitAction {
+  final String ref;
+  final String message;
+  const SquashMergeAction(this.ref, this.message);
+  @override
+  String get label => 'Squashing $ref…';
+}
+
+enum PatchTarget {
+  /// Añadir al índice (stage).
+  stage,
+
+  /// Quitar del índice (unstage).
+  unstage,
+
+  /// Deshacer en el directorio de trabajo (descartar).
+  discard,
+}
+
+/// Aplica un parche parcial (trozos o líneas sueltas de un diff).
+class ApplyPatchAction extends GitAction {
+  final String patch;
+  final PatchTarget target;
+  const ApplyPatchAction(this.patch, this.target);
+  @override
+  String get label => switch (target) {
+        PatchTarget.stage => 'Staging selection…',
+        PatchTarget.unstage => 'Unstaging selection…',
+        PatchTarget.discard => 'Discarding selection…',
+      };
+}
+
+/// Escribe la versión resuelta de un fichero en conflicto y lo marca como
+/// resuelto (stage).
+class ResolveConflictAction extends GitAction {
+  final String path;
+
+  /// Contenido final; null = dejar el fichero tal cual y solo marcarlo.
+  final String? content;
+  const ResolveConflictAction(this.path, [this.content]);
+  @override
+  String get label => 'Resolving $path…';
+}
+
+/// Checkout de una Pull Request de GitHub.
+class CheckoutPullRequestAction extends GitAction {
+  final int number;
+  final String headRef;
+
+  /// La rama de la PR vive en el mismo repo (no en un fork).
+  final bool sameRepo;
+  const CheckoutPullRequestAction({required this.number, required this.headRef, required this.sameRepo});
+  @override
+  String get label => 'Checking out PR #$number…';
+  @override
+  bool get isNetwork => true;
+}
+
+enum RebaseStepAction { pick, reword, squash, fixup, drop }
+
+class RebaseStep {
+  final String sha;
+  final String subject;
+  final RebaseStepAction action;
+
+  /// Nuevo mensaje para [RebaseStepAction.reword].
+  final String? message;
+
+  const RebaseStep({required this.sha, required this.subject, this.action = RebaseStepAction.pick, this.message});
+
+  RebaseStep copyWith({RebaseStepAction? action, String? message}) =>
+      RebaseStep(sha: sha, subject: subject, action: action ?? this.action, message: message ?? this.message);
+}
+
+/// `rebase -i` sobre [base] con los pasos ya decididos (orden incluido).
+class InteractiveRebaseAction extends GitAction {
+  final String base;
+  final List<RebaseStep> steps;
+  const InteractiveRebaseAction(this.base, this.steps);
+  @override
+  String get label => 'Interactive rebase…';
 }
 
 class StashAction extends GitAction {

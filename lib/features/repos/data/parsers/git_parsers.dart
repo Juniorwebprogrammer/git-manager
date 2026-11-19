@@ -220,10 +220,11 @@ FileDiff parseUnifiedDiff(String path, String output, {int maxLines = 20000}) {
   String? header;
   var lines = <DiffLine>[];
   var oldNo = 0, newNo = 0, total = 0;
+  var oldStart = 0, newStart = 0;
   var truncated = false;
 
   void flush() {
-    if (header != null) hunks.add(DiffHunk(header, lines));
+    if (header != null) hunks.add(DiffHunk(header, lines, oldStart: oldStart, newStart: newStart));
   }
 
   for (final raw in output.split('\n')) {
@@ -232,8 +233,8 @@ FileDiff parseUnifiedDiff(String path, String output, {int maxLines = 20000}) {
       flush();
       header = raw;
       lines = <DiffLine>[];
-      oldNo = int.parse(match.group(1)!);
-      newNo = int.parse(match.group(2)!);
+      oldNo = oldStart = int.parse(match.group(1)!);
+      newNo = newStart = int.parse(match.group(2)!);
       continue;
     }
     if (header == null) continue; // cabecera diff --git / index / --- / +++

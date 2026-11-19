@@ -4,6 +4,7 @@ import 'dart:io';
 import 'package:http/http.dart' as http;
 
 import '../../../../core/error/app_exception.dart';
+import '../../../repos/domain/entities/pull_request.dart';
 import '../../../repos/domain/entities/remote_repository.dart';
 import '../models/github_user_dto.dart';
 
@@ -85,6 +86,114 @@ class GitHubRemoteDataSource {
     return repos;
   }
 
+  Future<GitHubRepoInfo> fetchRepoInfo(String token, String owner, String name) async {
+    final response = await _get('/repos/$owner/$name', token);
+    final json = jsonDecode(response.body) as Map<String, dynamic>;
+    return GitHubRepoInfo(
+      owner: owner,
+      name: name,
+      defaultBranch: json['default_branch'] as String? ?? 'main',
+    );
+  }
+
+  Future<List<PullRequest>> fetchOpenPullRequests(String token, String owner, String name) async {
+    final response = await _get('/repos/$owner/$name/pulls?state=open&per_page=50&sort=updated&direction=desc', token);
+    final list = jsonDecode(response.body) as List<dynamic>;
+    return [for (final item in list) _pullFromJson(item as Map<String, dynamic>)];
+  }
+
+  /// Estado de CI de un commit: combina los "statuses" clásicos y los
+  /// "check runs" de GitHub Actions. Si el token no puede leerlos → none.
+  Future<CiStatus> fetchCiStatus(String token, String owner, String name, String sha) async {
+    final states = <String>[];
+    try {
+      final status = jsonDecode((await _get('/repos/$owner/$name/commits/$sha/status', token)).body)
+          as Map<String, dynamic>;
+      if (((status['total_count'] as int?) ?? 0) > 0) states.add(status['state'] as String? ?? '');
+    } catch (_) {}
+    try {
+      final checks = jsonDecode((await _get('/repos/$owner/$name/commits/$sha/check-runs?per_page=100', token)).body)
+          as Map<String, dynamic>;
+      for (final run in (checks['check_runs'] as List<dynamic>? ?? const [])) {
+        final map = run as Map<String, dynamic>;
+        states.add(map['status'] == 'completed' ? (map['conclusion'] as String? ?? '') : 'pending');
+      }
+    } catch (_) {}
+    return combineCiStates(states);
+  }
+
+  Future<PullRequest> createPullRequest(
+    String token,
+    String owner,
+    String name, {
+    required String title,
+    required String head,
+    required String base,
+    String body = '',
+    bool draft = false,
+  }) async {
+    final response = await _send(
+      'POST',
+      '/repos/$owner/$name/pulls',
+      token,
+      body: {'title': title, 'head': head, 'base': base, 'body': body, 'draft': draft},
+    );
+    return _pullFromJson(jsonDecode(response.body) as Map<String, dynamic>);
+  }
+
+  PullRequest _pullFromJson(Map<String, dynamic> json) {
+    final head = json['head'] as Map<String, dynamic>? ?? const {};
+    final base = json['base'] as Map<String, dynamic>? ?? const {};
+    final headRepo = head['repo'] as Map<String, dynamic>?;
+    final user = json['user'] as Map<String, dynamic>? ?? const {};
+    return PullRequest(
+      number: json['number'] as int,
+      title: json['title'] as String? ?? '',
+      author: user['login'] as String? ?? '',
+      headRef: head['ref'] as String? ?? '',
+      headSha: head['sha'] as String? ?? '',
+      headRepoFullName: headRepo?['full_name'] as String? ?? '',
+      baseRef: base['ref'] as String? ?? '',
+      url: json['html_url'] as String? ?? '',
+      draft: json['draft'] as bool? ?? false,
+      updatedAt: DateTime.tryParse(json['updated_at'] as String? ?? ''),
+    );
+  }
+
+  Future<http.Response> _send(String method, String path, String token, {Object? body}) async {
+    final http.Response response;
+    try {
+      final request = http.Request(method, Uri.parse('$_baseUrl$path'))
+        ..headers.addAll({..._headers(token), 'Content-Type': 'application/json'})
+        ..body = body == null ? '' : jsonEncode(body);
+      response = await http.Response.fromStream(await _client.send(request).timeout(const Duration(seconds: 20)));
+    } on SocketException catch (_) {
+      throw const ServerException('No internet connection.');
+    } on HttpException catch (_) {
+      throw const ServerException('Could not reach GitHub.');
+    }
+    if (response.statusCode >= 200 && response.statusCode < 300) return response;
+    if (response.statusCode == 401) throw const InvalidTokenException();
+    throw ServerException(_githubError(response));
+  }
+
+  /// Mensaje legible de un error de la API ("A pull request already exists…").
+  String _githubError(http.Response response) {
+    try {
+      final json = jsonDecode(response.body) as Map<String, dynamic>;
+      final details = (json['errors'] as List<dynamic>? ?? const [])
+          .map((e) => e is Map ? (e['message'] ?? e['code'] ?? '').toString() : e.toString())
+          .where((m) => m.isNotEmpty)
+          .join('\n');
+      final message = json['message'] as String? ?? 'GitHub error';
+      return details.isEmpty
+          ? '$message (HTTP ${response.statusCode})'
+          : '$message (HTTP ${response.statusCode}):\n$details';
+    } catch (_) {
+      return 'GitHub responded with status code ${response.statusCode}.';
+    }
+  }
+
   String _noreplyEmailFor(GitHubUserDto dto) =>
       '${dto.id}+${dto.login}@users.noreply.github.com';
 
@@ -106,4 +215,15 @@ class GitHubRemoteDataSource {
     }
     throw ServerException('GitHub responded with status code ${response.statusCode}.');
   }
+}
+
+/// Resume varios estados de CI (statuses y check runs) en uno.
+CiStatus combineCiStates(List<String> states) {
+  if (states.isEmpty) return CiStatus.none;
+  const failed = {'failure', 'error', 'cancelled', 'timed_out', 'action_required', 'startup_failure'};
+  if (states.any(failed.contains)) return CiStatus.failure;
+  if (states.any((s) => s == 'pending' || s == 'queued' || s == 'in_progress' || s.isEmpty)) {
+    return CiStatus.pending;
+  }
+  return CiStatus.success;
 }

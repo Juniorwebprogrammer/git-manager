@@ -16,6 +16,9 @@ class DiffTarget {
   /// El fichero ya no existe en esta versión (borrado).
   final bool deleted;
 
+  /// Fichero con conflictos de merge/rebase sin resolver.
+  final bool conflicted;
+
   const DiffTarget({
     required this.source,
     required this.path,
@@ -24,7 +27,12 @@ class DiffTarget {
     this.parentSha,
     this.untracked = false,
     this.deleted = false,
+    this.conflicted = false,
   });
+
+  /// Se puede hacer stage/unstage/descartar por trozos o por líneas.
+  bool get supportsPartialStaging =>
+      source != DiffSource.commit && !untracked && !conflicted && !deleted && oldPath == null;
 
   @override
   bool operator ==(Object other) =>
@@ -53,7 +61,13 @@ class DiffHunk {
   final String header;
   final List<DiffLine> lines;
 
-  const DiffHunk(this.header, this.lines);
+  /// Línea de inicio en el lado antiguo / nuevo (`@@ -oldStart +newStart @@`).
+  final int oldStart;
+  final int newStart;
+
+  const DiffHunk(this.header, this.lines, {this.oldStart = 0, this.newStart = 0});
+
+  bool get hasChanges => lines.any((l) => l.type == DiffLineType.added || l.type == DiffLineType.removed);
 }
 
 class FileDiff {

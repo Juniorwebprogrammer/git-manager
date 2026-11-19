@@ -71,6 +71,7 @@ class GitRunner {
     List<String> args, {
     String? workingDirectory,
     GitIdentity? identity,
+    Map<String, String>? extraEnvironment,
   }) async {
     try {
       final result = await Process.run(
@@ -83,6 +84,7 @@ class GitRunner {
           'GIT_EDITOR': 'true',
           'GIT_MERGE_AUTOEDIT': 'no',
           ...?identity?.toEnvironment(),
+          ...?extraEnvironment,
         },
         stdoutEncoding: _codec,
         stderrEncoding: _codec,
@@ -99,8 +101,14 @@ class GitRunner {
     List<String> args, {
     String? workingDirectory,
     GitIdentity? identity,
+    Map<String, String>? extraEnvironment,
   }) async {
-    final out = await tryRun(args, workingDirectory: workingDirectory, identity: identity);
+    final out = await tryRun(
+      args,
+      workingDirectory: workingDirectory,
+      identity: identity,
+      extraEnvironment: extraEnvironment,
+    );
     if (!out.ok) {
       final msg = out.message;
       throw GitCommandException(

@@ -12,6 +12,7 @@ import '../widgets/commit_graph_view.dart';
 import '../widgets/compare_panel.dart';
 import '../widgets/diff_viewer.dart';
 import '../widgets/file_history_view.dart';
+import '../widgets/pull_request_view.dart';
 import '../widgets/ref_sidebar.dart';
 import '../widgets/repo_toolbar.dart';
 import '../widgets/staging_panel.dart';
@@ -96,11 +97,12 @@ class _RepoViewState extends ConsumerState<RepoView> {
     final historyPath = ref.watch(provider.select((s) => s.historyPath));
     final blame = ref.watch(provider.select((s) => s.blame));
     final comparing = ref.watch(provider.select((s) => s.compare != null));
+    final pullRequest = ref.watch(provider.select((s) => s.pullRequestNumber));
 
     // Al cerrar un diff/historial, el widget con el foco desaparece y el
     // foco queda en el ámbito superior, fuera de los atajos (Esc, F5) de
     // esta pestaña. Se lo devolvemos.
-    ref.listen(provider.select((s) => (s.openFile, s.historyPath, s.blame, s.compare)), (_, _) {
+    ref.listen(provider.select((s) => (s.openFile, s.historyPath, s.blame, s.compare, s.pullRequestNumber)), (_, _) {
       WidgetsBinding.instance.addPostFrameCallback((_) {
         if (!mounted || !widget.active) return;
         _reclaimFocus();
@@ -153,17 +155,22 @@ class _RepoViewState extends ConsumerState<RepoView> {
                   return Row(
                     children: [
                       if (_sidebarVisible) ...[
-                        SizedBox(width: sidebar, child: RefSidebar(repo: widget.repo)),
+                        SizedBox(
+                          width: sidebar,
+                          child: RefSidebar(repo: widget.repo),
+                        ),
                         _DragHandle(onDrag: (dx) => setState(() => _sidebarWidth = sidebar + dx)),
                       ],
                       Expanded(
                         child: blame != null
                             ? BlameView(repo: widget.repo, path: blame.path, revision: blame.revision)
                             : historyPath != null
-                                ? FileHistoryView(repo: widget.repo, path: historyPath)
-                                : hasOpenFile
-                                    ? DiffViewer(repo: widget.repo)
-                                    : CommitGraphView(repo: widget.repo),
+                            ? FileHistoryView(repo: widget.repo, path: historyPath)
+                            : pullRequest != null && !hasOpenFile
+                            ? PullRequestView(key: ValueKey(pullRequest), repo: widget.repo, number: pullRequest)
+                            : hasOpenFile
+                            ? DiffViewer(repo: widget.repo)
+                            : CommitGraphView(repo: widget.repo),
                       ),
                       _DragHandle(onDrag: (dx) => setState(() => _panelWidth = panel - dx)),
                       SizedBox(
@@ -171,8 +178,8 @@ class _RepoViewState extends ConsumerState<RepoView> {
                         child: comparing
                             ? ComparePanel(repo: widget.repo)
                             : wipSelected
-                                ? StagingPanel(repo: widget.repo)
-                                : CommitDetailPanel(repo: widget.repo),
+                            ? StagingPanel(repo: widget.repo)
+                            : CommitDetailPanel(repo: widget.repo),
                       ),
                     ],
                   );

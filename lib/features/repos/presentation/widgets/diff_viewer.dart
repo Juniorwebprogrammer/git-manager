@@ -151,6 +151,59 @@ List<Widget> Function(bool compact) _hunkActions(DiffSource source, DiffHunk hun
   };
 }
 
+/// Diff de solo lectura (p. ej. de los ficheros de una PR), con vista
+/// unificada o lado a lado.
+class PatchView extends StatefulWidget {
+  final FileDiff diff;
+  final String path;
+
+  const PatchView({super.key, required this.diff, required this.path});
+
+  @override
+  State<PatchView> createState() => _PatchViewState();
+}
+
+class _PatchViewState extends State<PatchView> {
+  bool _split = false;
+
+  @override
+  Widget build(BuildContext context) {
+    final highlighter = CodeHighlighter.forPath(widget.path, Theme.of(context).brightness);
+    final Widget body;
+    if (widget.diff.isBinary) {
+      body = const _Notice('Binary file — no text diff to show.');
+    } else if (widget.diff.hunks.isEmpty) {
+      body = const _Notice('No textual changes to show (too large, renamed only, or mode change).');
+    } else {
+      body = _split
+          ? _SplitDiff(diff: widget.diff, highlighter: highlighter, source: DiffSource.commit)
+          : _UnifiedDiff(diff: widget.diff, highlighter: highlighter, source: DiffSource.commit);
+    }
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        Align(
+          alignment: Alignment.centerRight,
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(8, 4, 8, 4),
+            child: SegmentedButton<bool>(
+              showSelectedIcon: false,
+              style: const ButtonStyle(visualDensity: VisualDensity.compact),
+              segments: const [
+                ButtonSegment(value: false, tooltip: 'Unified diff', icon: Icon(Icons.view_agenda_outlined, size: 16)),
+                ButtonSegment(value: true, tooltip: 'Side-by-side diff', icon: Icon(Icons.vertical_split_outlined, size: 16)),
+              ],
+              selected: {_split},
+              onSelectionChanged: (s) => setState(() => _split = s.first),
+            ),
+          ),
+        ),
+        Expanded(child: body),
+      ],
+    );
+  }
+}
+
 class _Notice extends StatelessWidget {
   final String text;
 

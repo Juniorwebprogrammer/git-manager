@@ -6,6 +6,7 @@ import 'package:git_manager/features/accounts/data/datasources/github_remote_dat
 import 'package:git_manager/features/repos/data/parsers/git_parsers.dart';
 import 'package:git_manager/features/repos/domain/conflicts/conflict_parser.dart';
 import 'package:git_manager/features/repos/domain/entities/pull_request.dart';
+import 'package:git_manager/features/repos/domain/entities/pull_request_detail.dart';
 import 'package:git_manager/features/repos/domain/patch/patch_builder.dart';
 import 'package:http/http.dart' as http;
 import 'package:http/testing.dart';
@@ -215,6 +216,140 @@ void main() {
     test('other 403s on /user still mean an invalid token', () async {
       final api = GitHubRemoteDataSource(MockClient((req) async => http.Response('{"message":"Bad credentials"}', 403)));
       await expectLater(api.fetchAuthenticatedUser('ghp_x'), throwsA(isA<InvalidTokenException>()));
+    });
+  });
+
+  group('pull request view API', () {
+    Map<String, dynamic> detailJson({String state = 'open', bool merged = false}) => {
+          'number': 5,
+          'title': 'Add login',
+          'body': 'Adds the login screen.',
+          'state': state,
+          'merged': merged,
+          'draft': false,
+          'html_url': 'https://github.com/o/r/pull/5',
+          'user': {'login': 'ana'},
+          'head': {
+            'ref': 'feature/login',
+            'sha': 'abc123',
+            'repo': {'full_name': 'o/r'},
+          },
+          'base': {'ref': 'main'},
+          'mergeable': true,
+          'mergeable_state': 'clean',
+          'commits': 2,
+          'additions': 10,
+          'deletions': 3,
+          'changed_files': 1,
+          'created_at': '2026-11-19T10:00:00Z',
+        };
+
+    test('loads detail, timeline (comments + reviews in order), commits, files and checks', () async {
+      final client = MockClient((req) async {
+        final p = req.url.path;
+        if (p == '/repos/o/r/pulls/5') return http.Response(jsonEncode(detailJson()), 200);
+        if (p == '/repos/o/r/issues/5/comments') {
+          return http.Response(
+              jsonEncode([
+                {'user': {'login': 'bob'}, 'body': 'Looks good', 'created_at': '2026-11-19T12:00:00Z'},
+              ]),
+              200);
+        }
+        if (p == '/repos/o/r/pulls/5/reviews') {
+          return http.Response(
+              jsonEncode([
+                {'user': {'login': 'eve'}, 'state': 'CHANGES_REQUESTED', 'body': 'Fix X', 'submitted_at': '2026-11-19T11:00:00Z'},
+                {'user': {'login': 'eve'}, 'state': 'PENDING', 'body': '', 'submitted_at': null},
+              ]),
+              200);
+        }
+        if (p == '/repos/o/r/pulls/5/commits') {
+          return http.Response(
+              jsonEncode([
+                {'sha': 'c1', 'commit': {'message': 'First\n\nbody', 'author': {'name': 'Ana', 'date': '2026-11-19T09:00:00Z'}}},
+              ]),
+              200);
+        }
+        if (p == '/repos/o/r/pulls/5/files') {
+          return http.Response(
+              jsonEncode([
+                {'filename': 'lib/a.dart', 'status': 'modified', 'additions': 1, 'deletions': 1, 'patch': '@@ -1 +1 @@\n-a\n+b'},
+              ]),
+              200);
+        }
+        if (p.endsWith('/check-runs')) {
+          return http.Response(
+              jsonEncode({
+                'check_runs': [
+                  {'name': 'build', 'status': 'completed', 'conclusion': 'success', 'html_url': 'https://ci/1'},
+                  {'name': 'tests', 'status': 'in_progress', 'conclusion': null},
+                ],
+              }),
+              200);
+        }
+        if (p.endsWith('/status')) return http.Response(jsonEncode({'statuses': []}), 200);
+        return http.Response('{}', 404);
+      });
+
+      final bundle = await GitHubRemoteDataSource(client).fetchPullRequestBundle('t', 'o', 'r', 5);
+      expect(bundle.detail.title, 'Add login');
+      expect(bundle.detail.state, PullRequestState.open);
+      expect(bundle.detail.mergeability.canMerge, isTrue);
+      expect(bundle.timeline.map((e) => e.author), ['eve', 'bob']); // la review pendiente no sale
+      expect(bundle.timeline.first.review, ReviewState.changesRequested);
+      expect(bundle.commits.single.subject, 'First');
+      expect(bundle.files.single.patch, contains('+b'));
+      expect(bundle.checks.map((c) => c.status), [CiStatus.success, CiStatus.pending]);
+      expect(bundle.ci, CiStatus.pending);
+    });
+
+    test('merged and closed states, and mergeability texts', () {
+      expect(PullRequestDetail(
+        number: 1, title: '', body: '', author: '', state: PullRequestState.open, headRef: 'f', headSha: '',
+        headRepoFullName: 'o/r', baseRef: 'main', url: 'https://github.com/o/r/pull/1', mergeableState: 'dirty',
+      ).mergeability, (canMerge: false, text: 'Conflicts with main. Check it out, merge or rebase main into it, resolve and push.'));
+    });
+
+    test('operations send the right requests', () async {
+      final calls = <String>[];
+      final client = MockClient((req) async {
+        calls.add('${req.method} ${req.url.path} ${req.body}');
+        if (req.method == 'GET') return http.Response(jsonEncode(detailJson()), 200);
+        return http.Response('{}', 200);
+      });
+      final api = GitHubRemoteDataSource(client);
+
+      await api.pullRequestAction('t', 'o', 'r', 5, const CommentOnPullRequest('Nice'));
+      await api.pullRequestAction('t', 'o', 'r', 5, const ReviewPullRequest(ReviewEvent.approve, 'LGTM'));
+      await api.pullRequestAction('t', 'o', 'r', 5, const ReviewPullRequest(ReviewEvent.requestChanges, ''));
+      await api.pullRequestAction('t', 'o', 'r', 5, const SetPullRequestOpen(false));
+      await api.pullRequestAction('t', 'o', 'r', 5, const EditPullRequest('New title', 'New body'));
+      await api.pullRequestAction(
+          't', 'o', 'r', 5, const MergePullRequest(MergeMethod.squash, title: 'Add login (#5)', deleteBranch: true));
+
+      expect(calls, [
+        'POST /repos/o/r/issues/5/comments {"body":"Nice"}',
+        'POST /repos/o/r/pulls/5/reviews {"event":"APPROVE","body":"LGTM"}',
+        'POST /repos/o/r/pulls/5/reviews {"event":"REQUEST_CHANGES"}',
+        'PATCH /repos/o/r/pulls/5 {"state":"closed"}',
+        'PATCH /repos/o/r/pulls/5 {"title":"New title","body":"New body"}',
+        'GET /repos/o/r/pulls/5 ',
+        'PUT /repos/o/r/pulls/5/merge {"merge_method":"squash","commit_title":"Add login (#5)"}',
+        'DELETE /repos/o/r/git/refs/heads/feature/login ',
+      ]);
+    });
+
+    test('GitHub refusing to approve your own PR is shown with its reason', () async {
+      final api = GitHubRemoteDataSource(MockClient((req) async => http.Response(
+          jsonEncode({
+            'message': 'Unprocessable Entity',
+            'errors': ['Review Can not approve your own pull request'],
+          }),
+          422)));
+      await expectLater(
+        api.pullRequestAction('t', 'o', 'r', 5, const ReviewPullRequest(ReviewEvent.approve)),
+        throwsA(isA<ServerException>().having((e) => e.message, 'm', contains('Can not approve your own pull request'))),
+      );
     });
   });
 }

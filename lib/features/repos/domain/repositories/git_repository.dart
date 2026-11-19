@@ -4,6 +4,7 @@ import '../entities/git_action.dart';
 import '../entities/git_commit.dart';
 import '../entities/file_change.dart';
 import '../entities/pull_request.dart';
+import '../entities/pull_request_detail.dart';
 import '../entities/repo_extras.dart';
 import '../entities/remote_repository.dart';
 import '../entities/repo_snapshot.dart';
@@ -56,6 +57,12 @@ abstract interface class GitRepository {
 
   /// Pull Requests abiertas del repo de `origin`, con su estado de CI.
   Future<Result<List<PullRequest>>> listPullRequests(RepoHandle repo);
+
+  /// Detalle, conversación, commits, ficheros y checks de una PR.
+  Future<Result<PullRequestBundle>> loadPullRequest(RepoHandle repo, int number);
+
+  /// Comentar, revisar, hacer merge, cerrar/reabrir o editar una PR.
+  Future<Result<void>> pullRequestAction(RepoHandle repo, int number, PullRequestOp op);
 
   Future<Result<PullRequest>> createPullRequest(
     RepoHandle repo, {

@@ -1,7 +1,9 @@
 import 'dart:async';
 import 'dart:io';
 
+import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:git_manager/core/di/providers.dart';
@@ -22,6 +24,7 @@ import 'package:git_manager/features/accounts/domain/repositories/account_reposi
 import 'package:git_manager/features/repos/presentation/pages/workspace_page.dart';
 import 'package:mocktail/mocktail.dart';
 import 'package:git_manager/features/repos/presentation/widgets/commit_detail_panel.dart';
+import 'package:git_manager/features/repos/presentation/widgets/commit_graph_view.dart';
 import 'package:git_manager/features/repos/presentation/widgets/diff_viewer.dart';
 import 'package:git_manager/features/repos/presentation/widgets/staging_panel.dart';
 
@@ -120,7 +123,10 @@ void main() {
     // Cada await sobre IO real necesita un ciclo runAsync + pump.
     for (var i = 0; i < 60; i++) {
       await tester.runAsync(() => Future<void>.delayed(const Duration(milliseconds: 15)));
-      await tester.pump();
+      // Avanzar también el reloj falso: si no, las animaciones de entrada de
+      // menús y diálogos se quedan en opacidad 0 y no se pintan (ni se
+      // detectan sus overflows).
+      await tester.pump(const Duration(milliseconds: 16));
     }
   }
 
@@ -186,6 +192,16 @@ void main() {
       await settle(tester);
       expect(find.text('Commit 2 files'), findsOneWidget);
 
+      // Menú contextual de una rama (textos largos tipo "Rebase main onto …").
+      await tester.tapAt(tester.getCenter(find.text('feature/login').first), buttons: kSecondaryButton);
+      await settle(tester);
+      // Terminar la animación de entrada: con opacidad 0 no se pinta y el
+      // overflow no llegaría a detectarse.
+      await tester.pump(const Duration(milliseconds: 500));
+      expect(find.textContaining('Rebase main onto feature/login'), findsOneWidget);
+      await tester.sendKeyEvent(LogicalKeyboardKey.escape);
+      await settle(tester);
+
       // Diálogo de abrir/clonar.
       await tester.tap(find.byTooltip('Open or clone a repository (Ctrl+T)'));
       await settle(tester);
@@ -197,6 +213,29 @@ void main() {
       expect(tester.takeException(), isNull);
     });
   }
+
+  testWidgets('hovering a "+N" ref chip lists every ref and checks one out on click', (tester) async {
+    await pumpWorkspace(tester, const Size(1280, 720));
+    // El commit de merge tiene "main" (actual) y el tag "v1.0.0".
+    final chip = find.descendant(of: find.byType(CommitGraphView), matching: find.text('main'));
+    expect(chip, findsOneWidget);
+    expect(find.widgetWithText(MenuItemButton, 'v1.0.0'), findsNothing);
+
+    final mouse = await tester.createGesture(kind: PointerDeviceKind.mouse);
+    await mouse.addPointer(location: Offset.zero);
+    addTearDown(mouse.removePointer);
+    await mouse.moveTo(tester.getCenter(chip));
+    await tester.pump(const Duration(milliseconds: 400));
+    await tester.pump();
+
+    expect(find.widgetWithText(MenuItemButton, 'v1.0.0'), findsOneWidget);
+    expect(find.textContaining('2 refs on this commit'), findsOneWidget);
+
+    await tester.tap(find.widgetWithText(MenuItemButton, 'v1.0.0'));
+    await settle(tester);
+    expect(find.textContaining('detached @'), findsOneWidget);
+    expect(tester.takeException(), isNull);
+  });
 
   group('rebase conflict', () {
     setUp(() async {

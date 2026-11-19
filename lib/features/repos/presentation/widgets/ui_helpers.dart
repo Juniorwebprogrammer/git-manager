@@ -247,6 +247,9 @@ Future<T?> showContextMenu<T>(
   return showMenu<T>(
     context: context,
     position: RelativeRect.fromRect(position & const Size(1, 1), Offset.zero & overlay.size),
+    // Por defecto el menú no pasa de 280 px y cortaba textos como
+    // "Rebase feature/x onto origin/main".
+    constraints: const BoxConstraints(minWidth: 200, maxWidth: 440),
     items: items,
   );
 }
@@ -260,7 +263,13 @@ PopupMenuItem<String> menuItem(String value, IconData icon, String label, {bool 
       children: [
         Icon(icon, size: 18, color: color),
         const SizedBox(width: 12),
-        Text(label, style: TextStyle(color: color)),
+        Flexible(
+          child: Tooltip(
+            message: label,
+            waitDuration: const Duration(seconds: 1),
+            child: Text(label, maxLines: 1, overflow: TextOverflow.ellipsis, style: TextStyle(color: color)),
+          ),
+        ),
       ],
     ),
   );

@@ -293,6 +293,7 @@ class _MenuArrow extends StatelessWidget {
       tooltip: tooltip,
       enabled: enabled,
       position: PopupMenuPosition.under,
+      constraints: const BoxConstraints(minWidth: 200, maxWidth: 440),
       padding: EdgeInsets.zero,
       onSelected: onSelected,
       itemBuilder: (_) => items,

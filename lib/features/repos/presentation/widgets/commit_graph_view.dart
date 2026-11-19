@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
@@ -543,8 +544,25 @@ class _CommitRow extends ConsumerWidget {
   }
 }
 
+/// Acción de checkout adecuada para una etiqueta del grafo.
+GitAction? _checkoutFor(RefLabel l) => switch (l.kind) {
+  RefLabelKind.local => CheckoutAction(l.name),
+  RefLabelKind.remote => CheckoutRemoteAction(l.name, l.name.substring(l.name.indexOf('/') + 1)),
+  RefLabelKind.tag => CheckoutDetachedAction(l.name),
+  RefLabelKind.head => null,
+};
+
+IconData _refIcon(RefLabelKind kind) => switch (kind) {
+  RefLabelKind.local => Icons.laptop,
+  RefLabelKind.remote => Icons.cloud_outlined,
+  RefLabelKind.tag => Icons.sell_outlined,
+  RefLabelKind.head => Icons.my_location,
+};
+
 /// Etiquetas de rama/tag. Une `main` y `origin/main` en una sola chip.
-class _RefChips extends ConsumerWidget {
+/// Si hay varias ("+N"), al pasar el ratón se despliega la lista completa
+/// y se puede hacer checkout de cualquiera con un clic.
+class _RefChips extends ConsumerStatefulWidget {
   final RepoHandle repo;
   final List<RefLabel> refs;
   final Color color;
@@ -552,7 +570,52 @@ class _RefChips extends ConsumerWidget {
   const _RefChips({required this.repo, required this.refs, required this.color});
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
+  ConsumerState<_RefChips> createState() => _RefChipsState();
+}
+
+class _RefChipsState extends ConsumerState<_RefChips> {
+  static const _openDelay = Duration(milliseconds: 250);
+  static const _closeDelay = Duration(milliseconds: 300);
+
+  final _menu = MenuController();
+  Timer? _openTimer;
+  Timer? _closeTimer;
+
+  @override
+  void dispose() {
+    _openTimer?.cancel();
+    _closeTimer?.cancel();
+    super.dispose();
+  }
+
+  void _hoverIn() {
+    _closeTimer?.cancel();
+    if (_menu.isOpen) return;
+    _openTimer?.cancel();
+    _openTimer = Timer(_openDelay, () {
+      if (mounted) _menu.open();
+    });
+  }
+
+  /// Se cierra con un pequeño margen para poder llevar el ratón al panel.
+  void _hoverOut() {
+    _openTimer?.cancel();
+    _closeTimer?.cancel();
+    _closeTimer = Timer(_closeDelay, () {
+      if (mounted && _menu.isOpen) _menu.close();
+    });
+  }
+
+  void _checkout(RefLabel label) {
+    _menu.close();
+    final action = _checkoutFor(label);
+    if (action != null) runGitAction(context, ref, widget.repo, action);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final refs = widget.refs;
+    final color = widget.color;
     if (refs.isEmpty) return const SizedBox.shrink();
 
     final locals = refs.where((r) => r.kind == RefLabelKind.local).map((r) => r.name).toSet();
@@ -574,76 +637,130 @@ class _RefChips extends ConsumerWidget {
     final theme = Theme.of(context);
     final current = first.label.isCurrent;
     final fg = current ? Colors.white : theme.colorScheme.onSurface;
+    // Todas las refs (también las remotas que la chip agrupa), salvo HEAD.
+    final listed = refs.where((r) => r.kind != RefLabelKind.head).toList();
+    final hasList = listed.length > 1;
+
+    final chip = GestureDetector(
+      onDoubleTap: () => _checkout(first.label),
+      child: LayoutBuilder(
+        builder: (context, c) {
+          // Con poco sitio, primero sobran los iconos.
+          final roomy = c.maxWidth >= 72;
+          return Container(
+            height: 20,
+            padding: EdgeInsets.symmetric(horizontal: roomy ? 6 : 4),
+            decoration: BoxDecoration(
+              color: color.withValues(alpha: current ? 0.9 : 0.22),
+              border: Border.all(color: color),
+              borderRadius: BorderRadius.circular(4),
+            ),
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                if (roomy) ...[
+                  if (current) Icon(Icons.check, size: 13, color: fg),
+                  Icon(_refIcon(first.label.kind), size: 12, color: fg),
+                  if (first.alsoRemote) Icon(Icons.cloud_outlined, size: 12, color: fg),
+                  const SizedBox(width: 4),
+                ],
+                Flexible(
+                  child: Text(
+                    first.name,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(fontSize: 11.5, fontWeight: FontWeight.w600, color: fg),
+                  ),
+                ),
+              ],
+            ),
+          );
+        },
+      ),
+    );
+
+    final chipsRow = Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Flexible(
+          child: hasList ? chip : Tooltip(message: '${first.name}\n\nDouble-click to check out', child: chip),
+        ),
+        if (rest > 0)
+          Container(
+            margin: const EdgeInsets.only(left: 3),
+            padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 1),
+            decoration: BoxDecoration(
+              color: color.withValues(alpha: 0.18),
+              borderRadius: BorderRadius.circular(8),
+            ),
+            child: Text('+$rest', style: theme.textTheme.labelSmall?.copyWith(color: color)),
+          ),
+      ],
+    );
 
     return Padding(
       padding: const EdgeInsets.only(left: 8, right: 4),
       child: Row(
         children: [
+          // La chip se queda con casi todo el ancho; la línea, con el resto.
           Flexible(
             flex: 8,
-            child: GestureDetector(
-              onDoubleTap: () {
-                final l = first.label;
-                final action = switch (l.kind) {
-                  RefLabelKind.local => CheckoutAction(l.name),
-                  RefLabelKind.remote => CheckoutRemoteAction(l.name, l.name.substring(l.name.indexOf('/') + 1)),
-                  _ => null,
-                };
-                if (action != null) runGitAction(context, ref, repo, action);
-              },
-              child: Tooltip(
-                message: '${chips.map((c) => c.name).join('\n')}\n\nDouble-click to check out',
-                child: LayoutBuilder(
-                  builder: (context, c) {
-                    // Con poco sitio, primero sobran los iconos.
-                    final roomy = c.maxWidth >= 72;
-                    return Container(
-                      height: 20,
-                      padding: EdgeInsets.symmetric(horizontal: roomy ? 6 : 4),
-                      decoration: BoxDecoration(
-                        color: color.withValues(alpha: current ? 0.9 : 0.22),
-                        border: Border.all(color: color),
-                        borderRadius: BorderRadius.circular(4),
-                      ),
-                      child: Row(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          if (roomy) ...[
-                            if (current) Icon(Icons.check, size: 13, color: fg),
-                            Icon(
-                              switch (first.label.kind) {
-                                RefLabelKind.local => Icons.laptop,
-                                RefLabelKind.remote => Icons.cloud_outlined,
-                                RefLabelKind.tag => Icons.sell_outlined,
-                                RefLabelKind.head => Icons.my_location,
-                              },
-                              size: 12,
-                              color: fg,
+            child: !hasList
+                ? chipsRow
+                : MenuAnchor(
+                    controller: _menu,
+                    alignmentOffset: const Offset(0, 2),
+                    style: MenuStyle(
+                      backgroundColor: WidgetStatePropertyAll(theme.colorScheme.surfaceContainerHigh),
+                      side: WidgetStatePropertyAll(BorderSide(color: theme.colorScheme.outlineVariant)),
+                      shape: WidgetStatePropertyAll(RoundedRectangleBorder(borderRadius: BorderRadius.circular(8))),
+                      maximumSize: const WidgetStatePropertyAll(Size(380, 420)),
+                    ),
+                    menuChildren: [
+                      MouseRegion(
+                        onEnter: (_) => _closeTimer?.cancel(),
+                        onExit: (_) => _hoverOut(),
+                        child: Column(
+                          mainAxisSize: MainAxisSize.min,
+                          crossAxisAlignment: CrossAxisAlignment.stretch,
+                          children: [
+                            Padding(
+                              padding: const EdgeInsets.fromLTRB(12, 6, 12, 4),
+                              child: Text(
+                                '${listed.length} refs on this commit · click to check out',
+                                style: theme.textTheme.labelSmall?.copyWith(
+                                  color: theme.colorScheme.onSurfaceVariant,
+                                ),
+                              ),
                             ),
-                            if (first.alsoRemote) Icon(Icons.cloud_outlined, size: 12, color: fg),
-                            const SizedBox(width: 4),
+                            for (final r in listed)
+                              MenuItemButton(
+                                leadingIcon: Icon(_refIcon(r.kind), size: 16, color: color),
+                                trailingIcon: r.isCurrent
+                                    ? Icon(Icons.check, size: 16, color: theme.colorScheme.primary)
+                                    : null,
+                                onPressed: r.isCurrent ? null : () => _checkout(r),
+                                child: ConstrainedBox(
+                                  constraints: const BoxConstraints(maxWidth: 260),
+                                  child: Text(
+                                    r.name,
+                                    maxLines: 1,
+                                    overflow: TextOverflow.ellipsis,
+                                    style: TextStyle(fontWeight: r.isCurrent ? FontWeight.w700 : null),
+                                  ),
+                                ),
+                              ),
                           ],
-                          Flexible(
-                            child: Text(
-                              first.name,
-                              maxLines: 1,
-                              overflow: TextOverflow.ellipsis,
-                              style: TextStyle(fontSize: 11.5, fontWeight: FontWeight.w600, color: fg),
-                            ),
-                          ),
-                        ],
+                        ),
                       ),
-                    );
-                  },
-                ),
-              ),
-            ),
+                    ],
+                    child: MouseRegion(
+                      onEnter: (_) => _hoverIn(),
+                      onExit: (_) => _hoverOut(),
+                      child: chipsRow,
+                    ),
+                  ),
           ),
-          if (rest > 0)
-            Padding(
-              padding: const EdgeInsets.only(left: 3),
-              child: Text('+$rest', style: theme.textTheme.labelSmall?.copyWith(color: color)),
-            ),
           // Línea que une la chip con el nodo, como en GitKraken.
           Expanded(child: Container(height: 1, color: color.withValues(alpha: 0.6))),
         ],

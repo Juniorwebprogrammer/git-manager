@@ -49,6 +49,7 @@ class GitCliDataSource {
     final branch = results[2];
     final head = results[3];
     final gitDir = results[6].trim();
+    final pending = await _pendingOperation(gitDir);
 
     return RepoSnapshot(
       path: path,
@@ -59,19 +60,38 @@ class GitCliDataSource {
       remotes: results[5].split('\n').map((s) => s.trim()).where((s) => s.isNotEmpty).toList(),
       staged: status.staged,
       unstaged: status.unstaged,
-      pendingOperation: await _pendingOperation(gitDir),
+      pendingOperation: pending.operation,
+      rebase: pending.rebase,
     );
   }
 
-  Future<PendingOperation> _pendingOperation(String gitDir) async {
-    if (await File(p.join(gitDir, 'MERGE_HEAD')).exists()) return PendingOperation.merge;
-    if (await File(p.join(gitDir, 'CHERRY_PICK_HEAD')).exists()) return PendingOperation.cherryPick;
-    if (await File(p.join(gitDir, 'REVERT_HEAD')).exists()) return PendingOperation.revert;
-    if (await Directory(p.join(gitDir, 'rebase-merge')).exists() ||
-        await Directory(p.join(gitDir, 'rebase-apply')).exists()) {
-      return PendingOperation.rebase;
+  Future<({PendingOperation operation, RebaseProgress? rebase})> _pendingOperation(String gitDir) async {
+    for (final dir in ['rebase-merge', 'rebase-apply']) {
+      final base = p.join(gitDir, dir);
+      if (!await Directory(base).exists()) continue;
+      Future<String?> read(String name) async {
+        final f = File(p.join(base, name));
+        return await f.exists() ? (await f.readAsString()).trim() : null;
+      }
+
+      final head = await read('head-name');
+      final merge = dir == 'rebase-merge';
+      return (
+        operation: PendingOperation.rebase,
+        rebase: RebaseProgress(
+          branch: head?.replaceFirst('refs/heads/', ''),
+          onto: (await read('onto'))?.substring(0, 7),
+          step: int.tryParse(await read(merge ? 'msgnum' : 'next') ?? '') ?? 0,
+          total: int.tryParse(await read(merge ? 'end' : 'last') ?? '') ?? 0,
+        ),
+      );
     }
-    return PendingOperation.none;
+    if (await File(p.join(gitDir, 'MERGE_HEAD')).exists()) return (operation: PendingOperation.merge, rebase: null);
+    if (await File(p.join(gitDir, 'CHERRY_PICK_HEAD')).exists()) {
+      return (operation: PendingOperation.cherryPick, rebase: null);
+    }
+    if (await File(p.join(gitDir, 'REVERT_HEAD')).exists()) return (operation: PendingOperation.revert, rebase: null);
+    return (operation: PendingOperation.none, rebase: null);
   }
 
   Future<List<GitCommit>> history(String path, {required int limit}) async {
@@ -203,10 +223,31 @@ class GitCliDataSource {
     switch (action) {
       case FetchAction():
         await git(['fetch', '--all', '--prune']);
+      case PullAction(rebase: true):
+        await git(['pull', '--rebase', '--autostash']);
       case PullAction():
         final rebaseConfigured =
             (await _git.tryRun(['config', '--get', 'pull.rebase'], workingDirectory: path)).ok;
         await git(['pull', '--no-edit', if (!rebaseConfigured) '--no-rebase']);
+      case RebaseAction(:final onto, :final branch):
+        await git(['rebase', '--autostash', onto, ?branch]);
+      case ContinueOperationAction():
+        final args = switch ((await snapshot(path)).pendingOperation) {
+          PendingOperation.merge => ['commit', '--no-edit'],
+          PendingOperation.cherryPick => ['cherry-pick', '--continue'],
+          PendingOperation.revert => ['revert', '--continue'],
+          PendingOperation.rebase => ['rebase', '--continue'],
+          PendingOperation.none => null,
+        };
+        if (args != null) await git(args);
+      case SkipOperationAction():
+        final args = switch ((await snapshot(path)).pendingOperation) {
+          PendingOperation.cherryPick => ['cherry-pick', '--skip'],
+          PendingOperation.revert => ['revert', '--skip'],
+          PendingOperation.rebase => ['rebase', '--skip'],
+          PendingOperation.merge || PendingOperation.none => null,
+        };
+        if (args != null) await git(args);
       case PushAction(:final branch, :final force):
         await _push(path, identity, branch: branch, force: force);
       case CheckoutAction(:final ref):

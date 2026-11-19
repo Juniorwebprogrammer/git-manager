@@ -52,6 +52,19 @@ class GitStash {
 /// Operación a medio hacer que bloquea el flujo normal (tras un conflicto).
 enum PendingOperation { none, merge, cherryPick, revert, rebase }
 
+/// Progreso de un rebase en curso.
+class RebaseProgress {
+  /// Rama que se está rebasando (`feature`), si se conoce.
+  final String? branch;
+
+  /// SHA sobre el que se rebasa.
+  final String? onto;
+  final int step;
+  final int total;
+
+  const RebaseProgress({this.branch, this.onto, this.step = 0, this.total = 0});
+}
+
 /// Foto del estado del repositorio en un momento dado (todo menos el
 /// historial, que se carga aparte porque es más pesado).
 class RepoSnapshot {
@@ -64,6 +77,7 @@ class RepoSnapshot {
   final List<FileChange> staged;
   final List<FileChange> unstaged;
   final PendingOperation pendingOperation;
+  final RebaseProgress? rebase;
 
   const RepoSnapshot({
     required this.path,
@@ -75,6 +89,7 @@ class RepoSnapshot {
     required this.staged,
     required this.unstaged,
     this.pendingOperation = PendingOperation.none,
+    this.rebase,
   });
 
   bool get isDetached => currentBranch == null && headSha != null;

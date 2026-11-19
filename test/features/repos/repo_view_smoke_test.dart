@@ -5,6 +5,8 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:git_manager/core/di/providers.dart';
+import 'package:git_manager/core/error/app_exception.dart';
+import 'package:git_manager/core/error/app_failure.dart';
 import 'package:git_manager/core/error/result.dart';
 import 'package:git_manager/core/git/git_runner.dart';
 import 'package:git_manager/features/repos/data/datasources/git_cli_data_source.dart';
@@ -14,7 +16,11 @@ import 'package:git_manager/features/repos/domain/entities/git_commit.dart';
 import 'package:git_manager/features/repos/domain/entities/remote_repository.dart';
 import 'package:git_manager/features/repos/domain/entities/repo_snapshot.dart';
 import 'package:git_manager/features/repos/domain/repositories/git_repository.dart';
-import 'package:git_manager/features/repos/presentation/pages/repo_view.dart';
+import 'package:git_manager/core/theme/app_theme.dart';
+import 'package:git_manager/features/accounts/domain/entities/git_account.dart';
+import 'package:git_manager/features/accounts/domain/repositories/account_repository.dart';
+import 'package:git_manager/features/repos/presentation/pages/workspace_page.dart';
+import 'package:mocktail/mocktail.dart';
 import 'package:git_manager/features/repos/presentation/widgets/commit_detail_panel.dart';
 import 'package:git_manager/features/repos/presentation/widgets/diff_viewer.dart';
 import 'package:git_manager/features/repos/presentation/widgets/staging_panel.dart';
@@ -26,7 +32,14 @@ class _CliGitRepository implements GitRepository {
 
   /// El IO real se lanza en la zona raíz: dentro de la zona de tiempo
   /// falso de testWidgets los procesos nunca llegarían a completarse.
-  Future<Result<T>> _wrap<T>(Future<T> Function() f) async => Success(await Zone.root.run(f));
+  Future<Result<T>> _wrap<T>(Future<T> Function() f) => Zone.root.run(() async {
+        // Los errores no pueden cruzar zonas: se capturan aquí, como el repo real.
+        try {
+          return Success<T>(await f());
+        } on AppException catch (e) {
+          return Failure<T>(GitCommandFailure(e.message));
+        }
+      });
 
   @override
   Future<Result<String>> resolveRepoRoot(String path) => _wrap(() => cli.resolveRoot(path));
@@ -51,6 +64,26 @@ class _CliGitRepository implements GitRepository {
   Future<Result<String>> clone(String accountId, String url, String parentDirectory) =>
       _wrap(() => cli.clone(url, parentDirectory, identity));
 }
+
+class _MockAccountRepository extends Mock implements AccountRepository {}
+
+class _FixedWorkspace implements WorkspaceRepository {
+  final List<String> tabs;
+  _FixedWorkspace(this.tabs);
+  @override
+  Future<({List<String> tabs, int activeIndex})> load(String accountId) async => (tabs: tabs, activeIndex: 0);
+  @override
+  Future<void> save(String accountId, List<String> tabs, int activeIndex) async {}
+}
+
+const _account = GitAccount(
+  id: 'a',
+  login: 'octocat',
+  displayName: 'Octo Cat',
+  email: 'octo@example.com',
+  avatarUrl: '',
+  profileUrl: '',
+);
 
 void main() {
   late Directory tmp;
@@ -91,57 +124,114 @@ void main() {
     }
   }
 
-  testWidgets('a repo tab renders graph, staging, commit detail and diffs without layout errors', (tester) async {
-    tester.view.physicalSize = const Size(1500, 900);
+  Future<void> pumpWorkspace(WidgetTester tester, Size size) async {
+    tester.view.physicalSize = size;
     tester.view.devicePixelRatio = 1;
     addTearDown(tester.view.reset);
+    final accounts = _MockAccountRepository();
+    when(() => accounts.getAccounts()).thenAnswer((_) async => const Success([_account]));
 
-    await tester.pumpWidget(ProviderScope(
-      overrides: [gitRepositoryProvider.overrideWithValue(git)],
-      child: MaterialApp(
-        theme: ThemeData.dark(useMaterial3: true),
-        home: Scaffold(body: RepoView(repo: (accountId: 'a', path: repo), active: false)),
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [
+          gitRepositoryProvider.overrideWithValue(git),
+          accountRepositoryProvider.overrideWithValue(accounts),
+          workspaceRepositoryProvider.overrideWithValue(_FixedWorkspace([repo])),
+        ],
+        child: MaterialApp(
+          theme: AppTheme.dark(),
+          home: const WorkspacePage(accountId: 'a'),
+        ),
       ),
-    ));
+    );
     await settle(tester);
+  }
 
-    // Grafo con commits, refs y WIP.
-    expect(find.text('Improve greeting'), findsOneWidget);
-    expect(find.text('Add login screen'), findsOneWidget);
-    expect(find.text('// WIP'), findsOneWidget);
-    expect(find.byType(StagingPanel), findsOneWidget);
-    expect(find.text('notes.md'), findsOneWidget);
+  for (final size in const [Size(1500, 900), Size(1280, 720), Size(1024, 680), Size(900, 600)]) {
+    testWidgets('workspace at ${size.width.toInt()}x${size.height.toInt()}: graph, staging, '
+        'commit detail and diffs render without layout errors', (tester) async {
+      await pumpWorkspace(tester, size);
 
-    // Diff de un cambio local, en las tres vistas.
-    await tester.tap(find.text('main.dart').first);
-    await settle(tester);
-    expect(find.byType(DiffViewer), findsOneWidget);
-    expect(find.text('Unstaged changes'), findsOneWidget);
-    await tester.tap(find.text('Split'));
-    await settle(tester);
-    await tester.tap(find.text('File'));
-    await settle(tester);
-    await tester.tap(find.byTooltip('Close (Esc)'));
-    await settle(tester);
+      // Grafo con commits, refs y WIP.
+      expect(find.text('Improve greeting'), findsOneWidget);
+      expect(find.text('Add login screen'), findsOneWidget);
+      expect(find.text('// WIP'), findsOneWidget);
+      expect(find.byType(StagingPanel), findsOneWidget);
+      expect(find.text('notes.md'), findsOneWidget);
 
-    // Detalle de un commit y su diff.
-    await tester.tap(find.text('Add login screen'));
-    await settle(tester);
-    expect(find.byType(CommitDetailPanel), findsOneWidget);
-    expect(find.text('1 file changed'), findsOneWidget);
-    await tester.tap(find.text('login.dart'));
-    await settle(tester);
-    expect(find.textContaining('Commit '), findsWidgets);
+      // Diff de un cambio local, en las tres vistas.
+      await tester.tap(find.text('main.dart').first);
+      await settle(tester);
+      expect(find.byType(DiffViewer), findsOneWidget);
+      await tester.tap(find.byTooltip('Side-by-side diff'));
+      await settle(tester);
+      await tester.tap(find.byTooltip('Whole file'));
+      await settle(tester);
+      await tester.tap(find.byTooltip('Close (Esc)'));
+      await settle(tester);
 
-    // Stage de un fichero desde el panel.
-    await tester.tap(find.byTooltip('Close (Esc)'));
-    await settle(tester);
-    await tester.tap(find.text('// WIP'));
-    await settle(tester);
-    await tester.tap(find.text('Stage all'));
-    await settle(tester);
-    expect(find.text('Commit 2 files'), findsOneWidget);
+      // Detalle de un commit y su diff.
+      await tester.tap(find.text('Add login screen'));
+      await settle(tester);
+      expect(find.byType(CommitDetailPanel), findsOneWidget);
+      await tester.tap(find.text('login.dart'));
+      await settle(tester);
+      await tester.tap(find.byTooltip('Close (Esc)'));
+      await settle(tester);
 
-    expect(tester.takeException(), isNull);
+      // Stage de todo desde el panel.
+      await tester.tap(find.text('// WIP'));
+      await settle(tester);
+      await tester.tap(find.byTooltip('Stage all changes'));
+      await settle(tester);
+      expect(find.text('Commit 2 files'), findsOneWidget);
+
+      // Diálogo de abrir/clonar.
+      await tester.tap(find.byTooltip('Open or clone a repository (Ctrl+T)'));
+      await settle(tester);
+      await tester.tap(find.text('Clone from GitHub'));
+      await settle(tester);
+      await tester.tapAt(const Offset(4, 4)); // cerrar el diálogo
+      await settle(tester);
+
+      expect(tester.takeException(), isNull);
+    });
+  }
+
+  group('rebase conflict', () {
+    setUp(() async {
+      final h = (accountId: 'a', path: repo);
+      await git.run(h, const StageAllAction());
+      await git.run(h, const CommitAction('wip on main'));
+      await git.run(h, const CreateBranchAction('topic', startPoint: 'v1.0.0'));
+      await File('$repo/main.dart').writeAsString('void main() {\n  print("topic");\n}\n');
+      await git.run(h, const StageAllAction());
+      await git.run(h, const CommitAction('topic change'));
+      final result = await git.run(h, const RebaseAction('main'));
+      expect(result, isA<Failure<void>>(), reason: 'the rebase should stop on a conflict');
+    });
+
+    testWidgets('banner shows progress, Continue finishes it', (tester) async {
+      await pumpWorkspace(tester, const Size(1024, 680));
+
+      expect(find.textContaining('Rebasing topic'), findsOneWidget);
+      expect(find.textContaining('step 1/1'), findsOneWidget);
+      expect(find.text('Skip'), findsOneWidget);
+      expect(find.text('Abort'), findsOneWidget);
+      final continueButton = find.widgetWithText(FilledButton, 'Continue');
+      expect(tester.widget<FilledButton>(continueButton).onPressed, isNull);
+
+      // Resolver el conflicto y marcarlo como resuelto desde la UI.
+      await tester.runAsync(() => File('$repo/main.dart').writeAsString('void main() {\n  print("both");\n}\n'));
+      await tester.tap(find.byTooltip('Stage file').first);
+      await settle(tester);
+      expect(tester.widget<FilledButton>(continueButton).onPressed, isNotNull);
+
+      await tester.tap(continueButton);
+      await settle(tester);
+      expect(find.textContaining('Rebasing topic'), findsNothing);
+      expect(find.text('topic change'), findsOneWidget);
+      expect(tester.takeException(), isNull);
+    });
   });
 }

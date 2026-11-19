@@ -37,7 +37,8 @@ class _DiffViewerState extends ConsumerState<DiffViewer> {
     // Al cambiar de fichero en modo "File" hay que pedir el contenido nuevo.
     if (_mode == _ViewMode.file && state.fileContent == null && state.diffError == null) {
       WidgetsBinding.instance.addPostFrameCallback(
-          (_) => ref.read(repoNotifierProvider(widget.repo).notifier).loadFileContent());
+        (_) => ref.read(repoNotifierProvider(widget.repo).notifier).loadFileContent(),
+      );
     }
 
     return Column(
@@ -80,8 +81,8 @@ class _Notice extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) => Center(
-        child: Text(text, style: TextStyle(color: Theme.of(context).colorScheme.onSurfaceVariant)),
-      );
+    child: Text(text, style: TextStyle(color: Theme.of(context).colorScheme.onSurfaceVariant)),
+  );
 }
 
 class _Header extends ConsumerWidget {
@@ -105,84 +106,139 @@ class _Header extends ConsumerWidget {
     final notifier = ref.read(repoNotifierProvider(repo).notifier);
     final paths = [if (target.oldPath != null) target.oldPath!, target.path];
 
-    return Container(
-      color: theme.colorScheme.surfaceContainerLow,
-      padding: const EdgeInsets.fromLTRB(12, 6, 4, 6),
-      child: Row(
-        children: [
-          Icon(Icons.description_outlined, size: 18, color: theme.colorScheme.onSurfaceVariant),
-          const SizedBox(width: 8),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Text(
-                  target.oldPath != null ? '${target.oldPath}  →  ${target.path}' : target.path,
-                  style: theme.textTheme.titleSmall,
-                  overflow: TextOverflow.ellipsis,
-                ),
-                Wrap(
-                  spacing: 8,
-                  children: [
-                    Text(
-                      switch (target.source) {
-                        DiffSource.unstaged => 'Unstaged changes',
-                        DiffSource.staged => 'Staged changes',
-                        DiffSource.commit => 'Commit ${target.commitSha!.substring(0, 7)}',
-                      },
-                      style: theme.textTheme.bodySmall?.copyWith(color: theme.colorScheme.onSurfaceVariant),
+    Future<void> stageOrUnstage(GitAction action) async {
+      final ok = await runGitAction(context, ref, repo, action);
+      if (ok) notifier.closeFile();
+    }
+
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        // Por debajo de este ancho, los botones pasan a ser solo iconos.
+        final compact = constraints.maxWidth < 700;
+
+        ButtonSegment<_ViewMode> segment(_ViewMode value, String label, String tooltip, IconData icon) => ButtonSegment(
+          value: value,
+          tooltip: tooltip,
+          icon: Icon(icon, size: 16),
+          label: compact ? null : Text(label),
+        );
+
+        final faded = theme.textTheme.bodySmall?.copyWith(color: theme.colorScheme.onSurfaceVariant);
+        final info = Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Tooltip(
+              message: target.oldPath != null ? '${target.oldPath} → ${target.path}' : target.path,
+              child: Text(
+                target.oldPath != null ? '${target.oldPath}  →  ${target.path}' : target.path,
+                style: theme.textTheme.titleSmall,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+              ),
+            ),
+            Text.rich(
+              TextSpan(
+                children: [
+                  TextSpan(
+                    text: switch (target.source) {
+                      DiffSource.unstaged => 'Unstaged changes',
+                      DiffSource.staged => 'Staged changes',
+                      DiffSource.commit => 'Commit ${target.commitSha!.substring(0, 7)}',
+                    },
+                    style: faded,
+                  ),
+                  if (diff != null && !diff!.isBinary) ...[
+                    TextSpan(
+                      text: '   +${diff!.additions}',
+                      style: faded?.copyWith(color: const Color(0xFF3FB950)),
                     ),
-                    if (diff != null && !diff!.isBinary) ...[
-                      Text('+${diff!.additions}',
-                          style: theme.textTheme.bodySmall?.copyWith(color: const Color(0xFF43A047))),
-                      Text('−${diff!.deletions}',
-                          style: theme.textTheme.bodySmall?.copyWith(color: const Color(0xFFE53935))),
-                    ],
-                    if (diff?.truncated ?? false)
-                      Text('(truncated)', style: theme.textTheme.bodySmall),
+                    TextSpan(
+                      text: '  −${diff!.deletions}',
+                      style: faded?.copyWith(color: const Color(0xFFF85149)),
+                    ),
                   ],
-                ),
-              ],
+                  if (diff?.truncated ?? false) TextSpan(text: '  (truncated)', style: faded),
+                ],
+              ),
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
             ),
-          ),
-          if (target.source == DiffSource.unstaged)
-            TextButton.icon(
-              onPressed: () async {
-                final ok = await runGitAction(context, ref, repo, StageAction(paths));
-                if (ok) notifier.closeFile();
-              },
-              icon: const Icon(Icons.add, size: 18),
-              label: const Text('Stage file'),
+          ],
+        );
+        final actions = <Widget>[
+          if (target.source != DiffSource.commit)
+            _HeaderAction(
+              compact: compact,
+              staged: target.source == DiffSource.staged,
+              onPressed: () =>
+                  stageOrUnstage(target.source == DiffSource.staged ? UnstageAction(paths) : StageAction(paths)),
             ),
-          if (target.source == DiffSource.staged)
-            TextButton.icon(
-              onPressed: () async {
-                final ok = await runGitAction(context, ref, repo, UnstageAction(paths));
-                if (ok) notifier.closeFile();
-              },
-              icon: const Icon(Icons.remove, size: 18),
-              label: const Text('Unstage file'),
-            ),
-          const SizedBox(width: 8),
+          const SizedBox(width: 6),
           SegmentedButton<_ViewMode>(
             showSelectedIcon: false,
             style: const ButtonStyle(visualDensity: VisualDensity.compact),
-            segments: const [
-              ButtonSegment(value: _ViewMode.unified, label: Text('Unified'), icon: Icon(Icons.view_agenda_outlined, size: 16)),
-              ButtonSegment(value: _ViewMode.split, label: Text('Split'), icon: Icon(Icons.vertical_split_outlined, size: 16)),
-              ButtonSegment(value: _ViewMode.file, label: Text('File'), icon: Icon(Icons.code, size: 16)),
+            segments: [
+              segment(_ViewMode.unified, 'Unified', 'Unified diff', Icons.view_agenda_outlined),
+              segment(_ViewMode.split, 'Split', 'Side-by-side diff', Icons.vertical_split_outlined),
+              segment(_ViewMode.file, 'File', 'Whole file', Icons.code),
             ],
             selected: {mode},
             onSelectionChanged: (s) => onMode(s.first),
           ),
-          IconButton(
-            tooltip: 'Close (Esc)',
-            onPressed: notifier.closeFile,
-            icon: const Icon(Icons.close),
-          ),
-        ],
-      ),
+          IconButton(tooltip: 'Close (Esc)', onPressed: notifier.closeFile, icon: const Icon(Icons.close)),
+        ];
+        final fileIcon = Icon(Icons.description_outlined, size: 18, color: theme.colorScheme.onSurfaceVariant);
+
+        return Container(
+          color: theme.colorScheme.surfaceContainerLow,
+          padding: const EdgeInsets.fromLTRB(12, 6, 4, 6),
+          // Estrecho: fichero arriba y acciones debajo, para que el nombre se lea.
+          child: constraints.maxWidth < 560
+              ? Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    Row(
+                      children: [
+                        fileIcon,
+                        const SizedBox(width: 8),
+                        Expanded(child: info),
+                      ],
+                    ),
+                    const SizedBox(height: 4),
+                    Row(mainAxisAlignment: MainAxisAlignment.end, children: actions),
+                  ],
+                )
+              : Row(
+                  children: [
+                    fileIcon,
+                    const SizedBox(width: 8),
+                    Expanded(child: info),
+                    ...actions,
+                  ],
+                ),
+        );
+      },
+    );
+  }
+}
+
+class _HeaderAction extends StatelessWidget {
+  final bool compact;
+  final bool staged;
+  final VoidCallback onPressed;
+
+  const _HeaderAction({required this.compact, required this.staged, required this.onPressed});
+
+  @override
+  Widget build(BuildContext context) {
+    final label = staged ? 'Unstage file' : 'Stage file';
+    final icon = Icon(staged ? Icons.remove : Icons.add, size: 18);
+    return Tooltip(
+      message: label,
+      child: compact
+          ? IconButton(onPressed: onPressed, icon: icon)
+          : TextButton.icon(onPressed: onPressed, icon: icon, label: Text(label)),
     );
   }
 }
@@ -193,12 +249,12 @@ class _DiffColors {
   final Color addBg, delBg, addGutter, delGutter, hunkBg, gutterText;
 
   _DiffColors(ThemeData theme)
-      : addBg = const Color(0xFF2EA043).withValues(alpha: theme.brightness == Brightness.dark ? 0.16 : 0.12),
-        delBg = const Color(0xFFF85149).withValues(alpha: theme.brightness == Brightness.dark ? 0.16 : 0.12),
-        addGutter = const Color(0xFF2EA043).withValues(alpha: 0.28),
-        delGutter = const Color(0xFFF85149).withValues(alpha: 0.28),
-        hunkBg = theme.colorScheme.primary.withValues(alpha: 0.08),
-        gutterText = theme.colorScheme.onSurfaceVariant.withValues(alpha: 0.7);
+    : addBg = const Color(0xFF2EA043).withValues(alpha: theme.brightness == Brightness.dark ? 0.16 : 0.12),
+      delBg = const Color(0xFFF85149).withValues(alpha: theme.brightness == Brightness.dark ? 0.16 : 0.12),
+      addGutter = const Color(0xFF2EA043).withValues(alpha: 0.28),
+      delGutter = const Color(0xFFF85149).withValues(alpha: 0.28),
+      hunkBg = theme.colorScheme.primary.withValues(alpha: 0.08),
+      gutterText = theme.colorScheme.onSurfaceVariant.withValues(alpha: 0.7);
 }
 
 class _Gutter extends StatelessWidget {
@@ -210,12 +266,12 @@ class _Gutter extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) => Container(
-        width: 52,
-        color: color,
-        padding: const EdgeInsets.only(right: 8),
-        alignment: Alignment.topRight,
-        child: Text(number?.toString() ?? '', style: style),
-      );
+    width: 52,
+    color: color,
+    padding: const EdgeInsets.only(right: 8),
+    alignment: Alignment.topRight,
+    child: Text(number?.toString() ?? '', style: style),
+  );
 }
 
 class _HunkHeader extends StatelessWidget {
@@ -226,10 +282,10 @@ class _HunkHeader extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) => Container(
-        color: colors.hunkBg,
-        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
-        child: Text(text, style: monoStyle(context, size: 12, color: Theme.of(context).colorScheme.primary)),
-      );
+    color: colors.hunkBg,
+    padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+    child: Text(text, style: monoStyle(context, size: 12, color: Theme.of(context).colorScheme.primary)),
+  );
 }
 
 class _UnifiedDiff extends StatelessWidget {
@@ -241,7 +297,9 @@ class _UnifiedDiff extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final colors = _DiffColors(Theme.of(context));
-    final rows = <Object>[for (final h in diff.hunks) ...[h.header, ...h.lines]];
+    final rows = <Object>[
+      for (final h in diff.hunks) ...[h.header, ...h.lines],
+    ];
     final base = monoStyle(context);
     final gutter = monoStyle(context, size: 11.5, color: colors.gutterText);
 
@@ -265,10 +323,16 @@ class _UnifiedDiff extends StatelessWidget {
                 children: [
                   _Gutter(line.oldNumber, gutter, color: gut),
                   _Gutter(line.newNumber, gutter, color: gut),
-                  SizedBox(width: 18, child: Text(sign, textAlign: TextAlign.center, style: base)),
+                  SizedBox(
+                    width: 18,
+                    child: Text(sign, textAlign: TextAlign.center, style: base),
+                  ),
                   Expanded(
                     child: line.type == DiffLineType.meta
-                        ? Text(line.text, style: base.copyWith(fontStyle: FontStyle.italic, color: colors.gutterText))
+                        ? Text(
+                            line.text,
+                            style: base.copyWith(fontStyle: FontStyle.italic, color: colors.gutterText),
+                          )
                         : Text.rich(highlighter.highlight(line.text, base)),
                   ),
                 ],

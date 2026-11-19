@@ -265,3 +265,28 @@ PopupMenuItem<String> menuItem(String value, IconData icon, String label, {bool 
     ),
   );
 }
+
+/// Confirma y lanza un rebase de [branch] (null = rama actual) sobre [onto].
+Future<void> confirmAndRebase(
+  BuildContext context,
+  WidgetRef ref,
+  RepoHandle repo, {
+  required String onto,
+  required String branchLabel,
+  String? branch,
+  String? ontoLabel,
+}) async {
+  final ok = await confirmDialog(
+    context,
+    title: 'Rebase $branchLabel onto ${ontoLabel ?? onto}',
+    message: 'The commits of "$branchLabel" will be replayed on top of "${ontoLabel ?? onto}", '
+        'rewriting their history into a straight line.\n\n'
+        '• Uncommitted changes are stashed and restored automatically.\n'
+        '• If there are conflicts you can resolve them, then Continue, Skip or Abort.\n'
+        '• If "$branchLabel" was already pushed, you will need to force push afterwards.',
+    confirmLabel: 'Rebase',
+  );
+  if (!ok || !context.mounted) return;
+  await runGitAction(context, ref, repo, RebaseAction(onto, branch: branch),
+      successMessage: 'Rebased $branchLabel onto ${ontoLabel ?? onto}');
+}

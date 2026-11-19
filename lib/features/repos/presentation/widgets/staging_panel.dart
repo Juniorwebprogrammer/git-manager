@@ -56,8 +56,14 @@ class _StagingPanelState extends ConsumerState<StagingPanel> {
     }
   }
 
+  /// Rebase, cherry-pick y revert se terminan con "Continue", no con commit.
+  bool _continuesInstead(RepoSnapshot s) =>
+      s.pendingOperation == PendingOperation.rebase ||
+      s.pendingOperation == PendingOperation.cherryPick ||
+      s.pendingOperation == PendingOperation.revert;
+
   bool _canCommit(RepoSnapshot s) {
-    if (s.hasConflicts) return false;
+    if (s.hasConflicts || _continuesInstead(s)) return false;
     final hasMessage = _summary.text.trim().isNotEmpty;
     if (_amend) return true; // sin mensaje → conserva el anterior
     if (s.pendingOperation == PendingOperation.merge) return true; // usa MERGE_MSG
@@ -84,6 +90,7 @@ class _StagingPanelState extends ConsumerState<StagingPanel> {
           title: 'Unstaged Files',
           count: snapshot.unstaged.length,
           actionLabel: 'Stage all',
+          actionTooltip: 'Stage all changes',
           actionIcon: Icons.add_task,
           onAction: snapshot.unstaged.isEmpty || busy ? null : stageAll,
         ),
@@ -92,12 +99,16 @@ class _StagingPanelState extends ConsumerState<StagingPanel> {
             changes: snapshot.unstaged,
             empty: 'No unstaged changes',
             isSelected: (c) => open?.source == DiffSource.unstaged && open?.path == c.path,
-            onOpen: (c) => ref.read(repoNotifierProvider(widget.repo).notifier).openFile(DiffTarget(
-                  source: DiffSource.unstaged,
-                  path: c.path,
-                  untracked: c.type == ChangeType.untracked,
-                  deleted: c.type == ChangeType.deleted,
-                )),
+            onOpen: (c) => ref
+                .read(repoNotifierProvider(widget.repo).notifier)
+                .openFile(
+                  DiffTarget(
+                    source: DiffSource.unstaged,
+                    path: c.path,
+                    untracked: c.type == ChangeType.untracked,
+                    deleted: c.type == ChangeType.deleted,
+                  ),
+                ),
             actions: (c) => [
               _MiniAction(
                 icon: Icons.delete_outline,
@@ -105,13 +116,15 @@ class _StagingPanelState extends ConsumerState<StagingPanel> {
                 onPressed: busy
                     ? null
                     : () async {
-                        final ok = await confirmDialog(context,
-                            title: 'Discard changes',
-                            message: c.type == ChangeType.untracked
-                                ? 'Delete the untracked file "${c.path}"? This cannot be undone.'
-                                : 'Discard your changes to "${c.path}"? This cannot be undone.',
-                            confirmLabel: 'Discard',
-                            destructive: true);
+                        final ok = await confirmDialog(
+                          context,
+                          title: 'Discard changes',
+                          message: c.type == ChangeType.untracked
+                              ? 'Delete the untracked file "${c.path}"? This cannot be undone.'
+                              : 'Discard your changes to "${c.path}"? This cannot be undone.',
+                          confirmLabel: 'Discard',
+                          destructive: true,
+                        );
                         if (ok && context.mounted) {
                           await runGitAction(context, ref, widget.repo, DiscardAction([c]));
                         }
@@ -130,6 +143,7 @@ class _StagingPanelState extends ConsumerState<StagingPanel> {
           title: 'Staged Files',
           count: snapshot.staged.length,
           actionLabel: 'Unstage all',
+          actionTooltip: 'Unstage all changes',
           actionIcon: Icons.remove_done,
           onAction: snapshot.staged.isEmpty || busy ? null : unstageAll,
         ),
@@ -138,12 +152,16 @@ class _StagingPanelState extends ConsumerState<StagingPanel> {
             changes: snapshot.staged,
             empty: 'Stage files to include them in the commit',
             isSelected: (c) => open?.source == DiffSource.staged && open?.path == c.path,
-            onOpen: (c) => ref.read(repoNotifierProvider(widget.repo).notifier).openFile(DiffTarget(
-                  source: DiffSource.staged,
-                  path: c.path,
-                  oldPath: c.oldPath,
-                  deleted: c.type == ChangeType.deleted,
-                )),
+            onOpen: (c) => ref
+                .read(repoNotifierProvider(widget.repo).notifier)
+                .openFile(
+                  DiffTarget(
+                    source: DiffSource.staged,
+                    path: c.path,
+                    oldPath: c.oldPath,
+                    deleted: c.type == ChangeType.deleted,
+                  ),
+                ),
             actions: (c) => [
               _MiniAction(
                 icon: Icons.remove,
@@ -151,79 +169,89 @@ class _StagingPanelState extends ConsumerState<StagingPanel> {
                 onPressed: busy
                     ? null
                     : () => runGitAction(
-                        context, ref, widget.repo, UnstageAction([if (c.oldPath != null) c.oldPath!, c.path])),
+                        context,
+                        ref,
+                        widget.repo,
+                        UnstageAction([if (c.oldPath != null) c.oldPath!, c.path]),
+                      ),
               ),
             ],
           ),
         ),
-        const Divider(height: 1),
-        Container(
-          color: theme.colorScheme.surfaceContainerLow,
-          padding: const EdgeInsets.all(12),
-          child: CallbackShortcuts(
-            bindings: {
-              const SingleActivator(LogicalKeyboardKey.enter, control: true): () {
-                if (_canCommit(snapshot) && !busy) _commit(snapshot);
+        if (!_continuesInstead(snapshot)) ...[
+          const Divider(height: 1),
+          Container(
+            color: theme.colorScheme.surfaceContainerLow,
+            padding: const EdgeInsets.all(12),
+            child: CallbackShortcuts(
+              bindings: {
+                const SingleActivator(LogicalKeyboardKey.enter, control: true): () {
+                  if (_canCommit(snapshot) && !busy) _commit(snapshot);
+                },
               },
-            },
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [
-                Row(
-                  children: [
-                    Text('Commit', style: theme.textTheme.titleSmall),
-                    const Spacer(),
-                    Text('Amend', style: theme.textTheme.bodySmall),
-                    Switch(
-                      value: _amend,
-                      onChanged: snapshot.headSha == null ? null : (v) => setState(() => _amend = v),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  Row(
+                    children: [
+                      Text('Commit', style: theme.textTheme.titleSmall),
+                      const Spacer(),
+                      Text('Amend', style: theme.textTheme.bodySmall),
+                      Switch(
+                        value: _amend,
+                        onChanged: snapshot.headSha == null ? null : (v) => setState(() => _amend = v),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 6),
+                  TextField(
+                    controller: _summary,
+                    maxLength: 72,
+                    decoration: InputDecoration(
+                      isDense: true,
+                      border: const OutlineInputBorder(),
+                      hintText: _amend
+                          ? 'Leave empty to keep the previous message'
+                          : snapshot.pendingOperation == PendingOperation.merge
+                          ? 'Leave empty to use the merge message'
+                          : 'Summary (required)',
                     ),
-                  ],
-                ),
-                const SizedBox(height: 6),
-                TextField(
-                  controller: _summary,
-                  maxLength: 72,
-                  decoration: InputDecoration(
-                    isDense: true,
-                    border: const OutlineInputBorder(),
-                    hintText: _amend
-                        ? 'Leave empty to keep the previous message'
-                        : snapshot.pendingOperation == PendingOperation.merge
-                            ? 'Leave empty to use the merge message'
-                            : 'Summary (required)',
                   ),
-                ),
-                TextField(
-                  controller: _description,
-                  minLines: 2,
-                  maxLines: 5,
-                  decoration: const InputDecoration(
-                    isDense: true,
-                    border: OutlineInputBorder(),
-                    hintText: 'Description',
+                  TextField(
+                    controller: _description,
+                    minLines: 2,
+                    maxLines: 5,
+                    decoration: const InputDecoration(
+                      isDense: true,
+                      border: OutlineInputBorder(),
+                      hintText: 'Description',
+                    ),
                   ),
-                ),
-                const SizedBox(height: 10),
-                FilledButton.icon(
-                  onPressed: _canCommit(snapshot) && !busy ? () => _commit(snapshot) : null,
-                  icon: const Icon(Icons.check),
-                  label: Text(_amend
-                      ? 'Amend previous commit'
-                      : snapshot.staged.isEmpty
+                  const SizedBox(height: 10),
+                  FilledButton.icon(
+                    onPressed: _canCommit(snapshot) && !busy ? () => _commit(snapshot) : null,
+                    icon: const Icon(Icons.check),
+                    label: Text(
+                      _amend
+                          ? 'Amend previous commit'
+                          : snapshot.staged.isEmpty
                           ? 'Stage files to commit'
-                          : 'Commit ${snapshot.staged.length} file${snapshot.staged.length == 1 ? '' : 's'}'),
-                ),
-                const SizedBox(height: 4),
-                Text(
-                  'Ctrl+Enter to commit',
-                  textAlign: TextAlign.center,
-                  style: theme.textTheme.labelSmall?.copyWith(color: theme.colorScheme.onSurfaceVariant),
-                ),
-              ],
+                          : 'Commit ${snapshot.staged.length} file${snapshot.staged.length == 1 ? '' : 's'}',
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                  ),
+                  const SizedBox(height: 4),
+                  Text(
+                    'Ctrl+Enter to commit',
+                    textAlign: TextAlign.center,
+                    style: theme.textTheme.labelSmall?.copyWith(color: theme.colorScheme.onSurfaceVariant),
+                  ),
+                ],
+              ),
             ),
           ),
-        ),
+        ],
       ],
     );
   }
@@ -238,40 +266,96 @@ class _PendingBanner extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final theme = Theme.of(context);
-    final what = switch (snapshot.pendingOperation) {
+    final op = snapshot.pendingOperation;
+    final what = switch (op) {
       PendingOperation.merge => 'Merge',
       PendingOperation.cherryPick => 'Cherry-pick',
       PendingOperation.revert => 'Revert',
       PendingOperation.rebase => 'Rebase',
       PendingOperation.none => '',
     };
+    final rebase = snapshot.rebase;
+    final title = op == PendingOperation.rebase && rebase != null
+        ? 'Rebasing ${rebase.branch ?? 'HEAD'}${rebase.onto != null ? ' onto ${rebase.onto}' : ''}'
+              '${rebase.total > 0 ? ' — step ${rebase.step}/${rebase.total}' : ''}'
+        : '$what in progress';
+    final conflicts = snapshot.hasConflicts;
+    final hint = conflicts
+        ? 'Resolve the conflicted files (marked !), stage them, then continue.'
+        : op == PendingOperation.merge
+        ? 'All conflicts resolved — commit to finish the merge.'
+        : 'All conflicts resolved — continue to the next step.';
+    final fg = theme.colorScheme.onTertiaryContainer;
+    final busy = ref.watch(repoNotifierProvider(repo).select((s) => s.isBusy));
+
+    Future<void> abort() async {
+      if (await confirmDialog(
+            context,
+            title: 'Abort ${what.toLowerCase()}',
+            message:
+                'Go back to the state before the ${what.toLowerCase()} started? '
+                'Conflict resolutions made so far will be lost.',
+            confirmLabel: 'Abort',
+            destructive: true,
+          ) &&
+          context.mounted) {
+        await runGitAction(context, ref, repo, const AbortOperationAction());
+      }
+    }
+
     return Container(
       color: theme.colorScheme.tertiaryContainer,
-      padding: const EdgeInsets.fromLTRB(12, 8, 8, 8),
-      child: Row(
+      padding: const EdgeInsets.fromLTRB(12, 10, 8, 6),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          Icon(Icons.warning_amber, color: theme.colorScheme.onTertiaryContainer),
-          const SizedBox(width: 10),
-          Expanded(
-            child: Text(
-              snapshot.hasConflicts
-                  ? '$what in progress — resolve the conflicts, stage the files and commit.'
-                  : '$what in progress — commit to finish it.',
-              style: theme.textTheme.bodySmall?.copyWith(color: theme.colorScheme.onTertiaryContainer),
-            ),
+          Row(
+            children: [
+              Icon(conflicts ? Icons.warning_amber : Icons.info_outline, color: fg, size: 20),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Text(
+                  title,
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
+                  style: theme.textTheme.titleSmall?.copyWith(color: fg),
+                ),
+              ),
+            ],
           ),
-          TextButton(
-            onPressed: () async {
-              if (await confirmDialog(context,
-                      title: 'Abort ${what.toLowerCase()}',
-                      message: 'Go back to the state before the ${what.toLowerCase()} started?',
-                      confirmLabel: 'Abort',
-                      destructive: true) &&
-                  context.mounted) {
-                await runGitAction(context, ref, repo, const AbortOperationAction());
-              }
-            },
-            child: const Text('Abort'),
+          const SizedBox(height: 4),
+          Text(hint, style: theme.textTheme.bodySmall?.copyWith(color: fg)),
+          const SizedBox(height: 6),
+          Wrap(
+            alignment: WrapAlignment.end,
+            spacing: 4,
+            children: [
+              TextButton(
+                onPressed: busy ? null : abort,
+                style: TextButton.styleFrom(foregroundColor: theme.colorScheme.error),
+                child: const Text('Abort'),
+              ),
+              if (op != PendingOperation.merge)
+                Tooltip(
+                  message: 'Drop the current commit and move on',
+                  child: TextButton(
+                    onPressed: busy ? null : () => runGitAction(context, ref, repo, const SkipOperationAction()),
+                    child: const Text('Skip'),
+                  ),
+                ),
+              FilledButton(
+                onPressed: busy || conflicts
+                    ? null
+                    : () => runGitAction(
+                        context,
+                        ref,
+                        repo,
+                        const ContinueOperationAction(),
+                        successMessage: op == PendingOperation.merge ? 'Merge committed' : null,
+                      ),
+                child: Text(op == PendingOperation.merge ? 'Commit merge' : 'Continue'),
+              ),
+            ],
           ),
         ],
       ),
@@ -283,6 +367,7 @@ class _ListHeader extends StatelessWidget {
   final String title;
   final int count;
   final String actionLabel;
+  final String actionTooltip;
   final IconData actionIcon;
   final VoidCallback? onAction;
 
@@ -290,6 +375,7 @@ class _ListHeader extends StatelessWidget {
     required this.title,
     required this.count,
     required this.actionLabel,
+    required this.actionTooltip,
     required this.actionIcon,
     required this.onAction,
   });
@@ -319,11 +405,14 @@ class _ListHeader extends StatelessWidget {
               ],
             ),
           ),
-          TextButton.icon(
-            onPressed: onAction,
-            icon: Icon(actionIcon, size: 16),
-            label: Text(actionLabel),
-            style: TextButton.styleFrom(visualDensity: VisualDensity.compact),
+          Tooltip(
+            message: actionTooltip,
+            child: TextButton.icon(
+              onPressed: onAction,
+              icon: Icon(actionIcon, size: 16),
+              label: Text(actionLabel),
+              style: TextButton.styleFrom(visualDensity: VisualDensity.compact),
+            ),
           ),
         ],
       ),
@@ -340,13 +429,13 @@ class _MiniAction extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) => IconButton(
-        tooltip: tooltip,
-        onPressed: onPressed,
-        icon: Icon(icon, size: 17),
-        visualDensity: VisualDensity.compact,
-        padding: EdgeInsets.zero,
-        constraints: const BoxConstraints(minWidth: 28, minHeight: 28),
-      );
+    tooltip: tooltip,
+    onPressed: onPressed,
+    icon: Icon(icon, size: 17),
+    visualDensity: VisualDensity.compact,
+    padding: EdgeInsets.zero,
+    constraints: const BoxConstraints(minWidth: 28, minHeight: 28),
+  );
 }
 
 /// Lista de ficheros cambiados reutilizada en staging y en el detalle.
@@ -384,14 +473,16 @@ class FileChangeTile extends StatelessWidget {
                     message: change.oldPath != null ? '${change.oldPath} → ${change.path}' : change.path,
                     waitDuration: const Duration(milliseconds: 700),
                     child: Text.rich(
-                      TextSpan(children: [
-                        TextSpan(text: change.fileName, style: theme.textTheme.bodyMedium),
-                        if (change.directory.isNotEmpty)
-                          TextSpan(
-                            text: '  ${change.directory}',
-                            style: theme.textTheme.bodySmall?.copyWith(color: theme.colorScheme.onSurfaceVariant),
-                          ),
-                      ]),
+                      TextSpan(
+                        children: [
+                          TextSpan(text: change.fileName, style: theme.textTheme.bodyMedium),
+                          if (change.directory.isNotEmpty)
+                            TextSpan(
+                              text: '  ${change.directory}',
+                              style: theme.textTheme.bodySmall?.copyWith(color: theme.colorScheme.onSurfaceVariant),
+                            ),
+                        ],
+                      ),
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
                     ),
@@ -426,8 +517,10 @@ class _FileList extends StatelessWidget {
   Widget build(BuildContext context) {
     if (changes.isEmpty) {
       return Center(
-        child: Text(empty,
-            style: Theme.of(context).textTheme.bodySmall?.copyWith(color: Theme.of(context).colorScheme.onSurfaceVariant)),
+        child: Text(
+          empty,
+          style: Theme.of(context).textTheme.bodySmall?.copyWith(color: Theme.of(context).colorScheme.onSurfaceVariant),
+        ),
       );
     }
     return ListView.builder(

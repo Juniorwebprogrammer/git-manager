@@ -35,6 +35,7 @@ class _RepoViewState extends ConsumerState<RepoView> {
   Timer? _timer;
   double _sidebarWidth = 240;
   double _panelWidth = 380;
+  bool _sidebarVisible = true;
 
   @override
   void initState() {
@@ -103,22 +104,26 @@ class _RepoViewState extends ConsumerState<RepoView> {
         autofocus: widget.active,
         child: Column(
           children: [
-            RepoToolbar(repo: widget.repo),
+            RepoToolbar(
+              repo: widget.repo,
+              sidebarVisible: _sidebarVisible,
+              onToggleSidebar: () => setState(() => _sidebarVisible = !_sidebarVisible),
+            ),
             const Divider(height: 1),
             Expanded(
               child: LayoutBuilder(
                 builder: (context, constraints) {
-                  // Que los paneles laterales nunca se coman el centro.
-                  final maxSide = (constraints.maxWidth - 360) / 2;
-                  final sidebar = _sidebarWidth.clamp(160.0, maxSide.clamp(160.0, 480.0));
-                  final panel = _panelWidth.clamp(280.0, maxSide.clamp(280.0, 640.0));
+                  // Los paneles laterales nunca se comen el centro: cada uno
+                  // tiene un máximo proporcional al ancho de la ventana.
+                  final width = constraints.maxWidth;
+                  final sidebar = _sidebarWidth.clamp(150.0, (width * 0.24).clamp(150.0, 480.0));
+                  final panel = _panelWidth.clamp(260.0, (width * 0.32).clamp(260.0, 640.0));
                   return Row(
                     children: [
-                      SizedBox(
-                        width: sidebar,
-                        child: RefSidebar(repo: widget.repo),
-                      ),
-                      _DragHandle(onDrag: (dx) => setState(() => _sidebarWidth = sidebar + dx)),
+                      if (_sidebarVisible) ...[
+                        SizedBox(width: sidebar, child: RefSidebar(repo: widget.repo)),
+                        _DragHandle(onDrag: (dx) => setState(() => _sidebarWidth = sidebar + dx)),
+                      ],
                       Expanded(
                         child: hasOpenFile ? DiffViewer(repo: widget.repo) : CommitGraphView(repo: widget.repo),
                       ),

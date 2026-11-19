@@ -130,7 +130,7 @@ void main() {
 
   test('push to a remote and track ahead/behind', () async {
     final remote = '${tmp.path}/remote.git';
-    await runner.run(['init', '-q', '--bare', remote], workingDirectory: tmp.path);
+    await runner.run(['init', '-q', '--bare', '-b', 'main', remote], workingDirectory: tmp.path);
     await runner.run(['remote', 'add', 'origin', remote], workingDirectory: repo);
 
     await act(const PushAction());
@@ -175,5 +175,106 @@ void main() {
     snap = await cli.snapshot(repo);
     expect(snap.pendingOperation, PendingOperation.none);
     expect(snap.hasChanges, isFalse);
+  });
+
+  group('rebase', () {
+    Future<void> commitFile(String name, String content, String message) async {
+      await write(name, content);
+      await act(const StageAllAction());
+      await act(CommitAction(message));
+    }
+
+    Future<List<String>> subjects() async => (await cli.history(repo, limit: 50)).map((c) => c.subject).toList();
+
+    setUp(() async {
+      await act(const CreateBranchAction('feature'));
+      await commitFile('f.txt', 'feature\n', 'feature work');
+      await act(const CheckoutAction('main'));
+      await commitFile('m.txt', 'main\n', 'main work');
+    });
+
+    test('rebases the current branch onto another (linear history)', () async {
+      await act(const CheckoutAction('feature'));
+      await act(const RebaseAction('main'));
+
+      final history = await cli.history(repo, limit: 50);
+      final feature = history.firstWhere((c) => c.subject == 'feature work');
+      final main = history.firstWhere((c) => c.subject == 'main work');
+      expect(feature.parents, [main.sha]);
+      expect((await cli.snapshot(repo)).currentBranch, 'feature');
+    });
+
+    test('rebases another branch onto the current one and checks it out', () async {
+      await act(const RebaseAction('main', branch: 'feature'));
+      final snap = await cli.snapshot(repo);
+      expect(snap.currentBranch, 'feature');
+      expect(await subjects(), ['feature work', 'main work', 'first commit']);
+    });
+
+    test('autostashes local changes', () async {
+      await act(const CheckoutAction('feature'));
+      await write('a.txt', 'dirty\n');
+      await act(const RebaseAction('main'));
+      expect((await cli.snapshot(repo)).unstaged.single.path, 'a.txt');
+    });
+
+    test('conflict: reports progress, then continue finishes it', () async {
+      await commitFile('f.txt', 'main version\n', 'main touches f');
+      await act(const CheckoutAction('feature'));
+
+      await expectLater(act(const RebaseAction('main')), throwsA(anything));
+      var snap = await cli.snapshot(repo);
+      expect(snap.pendingOperation, PendingOperation.rebase);
+      expect(snap.rebase?.branch, 'feature');
+      expect(snap.rebase?.step, 1);
+      expect(snap.rebase?.total, 1);
+      expect(snap.hasConflicts, isTrue);
+
+      await write('f.txt', 'resolved\n');
+      await act(const StageAction(['f.txt']));
+      await act(const ContinueOperationAction());
+
+      snap = await cli.snapshot(repo);
+      expect(snap.pendingOperation, PendingOperation.none);
+      expect(snap.currentBranch, 'feature');
+      expect(await subjects(), ['feature work', 'main touches f', 'main work', 'first commit']);
+    });
+
+    test('conflict: abort restores the branch', () async {
+      await commitFile('f.txt', 'main version\n', 'main touches f');
+      await act(const CheckoutAction('feature'));
+      final before = (await cli.snapshot(repo)).headSha;
+
+      await expectLater(act(const RebaseAction('main')), throwsA(anything));
+      await act(const AbortOperationAction());
+
+      final snap = await cli.snapshot(repo);
+      expect(snap.pendingOperation, PendingOperation.none);
+      expect(snap.currentBranch, 'feature');
+      expect(snap.headSha, before);
+    });
+
+    test('pull --rebase keeps history linear', () async {
+      final remote = '${tmp.path}/remote.git';
+      await runner.run(['init', '-q', '--bare', '-b', 'main', remote], workingDirectory: tmp.path);
+      await runner.run(['remote', 'add', 'origin', remote], workingDirectory: repo);
+      await act(const PushAction());
+
+      final parent = await Directory('${tmp.path}/other').create();
+      final other = await cli.clone(remote, parent.path, identity);
+      await File('$other/remote.txt').writeAsString('r\n');
+      await cli.run(other, const StageAllAction(), identity);
+      await cli.run(other, const CommitAction('remote work'), identity);
+      await cli.run(other, const PushAction(), identity);
+
+      await commitFile('local.txt', 'l\n', 'local work');
+      await act(const PullAction(rebase: true));
+
+      final history = await cli.history(repo, limit: 50);
+      expect(history.where((c) => c.isMerge), isEmpty);
+      final local = history.firstWhere((c) => c.subject == 'local work');
+      final remoteWork = history.firstWhere((c) => c.subject == 'remote work');
+      expect(local.parents, [remoteWork.sha]);
+    });
   });
 }

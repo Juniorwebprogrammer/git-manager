@@ -31,7 +31,9 @@ Click an account card to open its **workspace**: your projects in tabs (remember
 
 - **Open or clone**: open any local repository, or pick one of your GitHub repositories (listed with the account's token) and clone it.
 - **Commit graph**: the history of all branches, remotes and tags drawn as coloured lanes, with branch/tag labels, author, date and SHA. Double-click a label to check it out; right-click a commit to check it out, branch or tag from it, cherry-pick, revert or reset (soft / mixed / hard).
-- **Toolbar**: Pull, Push (sets upstream automatically on first push; offers force-with-lease if rejected), Fetch, Branch, Stash, Pop — with ahead/behind counters.
+- **Toolbar**: Pull (merge or **rebase**, from the ▾ menu), Push (sets upstream automatically on first push; offers force-with-lease if rejected), Fetch, Branch, Stash, Pop — with ahead/behind counters. Click the branch name to switch branches. The layout adapts to narrow windows (icon-only toolbar, collapsible sidebar, fewer graph columns).
+- **Rebase**: rebase the current branch onto any branch, tag or commit, or rebase another branch onto the current one (right-click in the sidebar or the graph), or **drag a branch onto another** in the sidebar to merge or rebase. Local changes are auto-stashed. On conflicts a banner shows the progress (*step 2/5*) with **Continue**, **Skip** and **Abort**.
+- **Search** the history by message, author, SHA or branch (`Enter` jumps to the next match).
 - **Sidebar**: local branches, remotes, tags and stashes, with a filter. Right-click for merge, push, delete (local or remote), push tag, apply/pop/drop stash.
 - **Staging & commit**: unstaged/staged lists, stage/unstage/discard per file or all, commit message + description, amend, `Ctrl+Enter` to commit. Merge/cherry-pick conflicts are flagged with an *Abort* option.
 - **Diff & code viewer**: unified or side-by-side diffs and a full-file view, with line numbers and syntax highlighting — for local changes and for any commit.

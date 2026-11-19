@@ -59,7 +59,7 @@ class WorkspacePage extends ConsumerWidget {
               // Barra superior: cuenta + pestañas de proyectos.
               Container(
                 height: 46,
-                color: theme.colorScheme.surfaceContainerHighest,
+                color: theme.colorScheme.surfaceContainerLowest,
                 child: Row(
                   children: [
                     IconButton(
@@ -162,53 +162,61 @@ class _RepoTab extends ConsumerWidget {
     return Tooltip(
       message: path,
       waitDuration: const Duration(milliseconds: 700),
-      child: Material(
-        color: active ? theme.colorScheme.surface : Colors.transparent,
-        borderRadius: const BorderRadius.vertical(top: Radius.circular(8)),
-        child: InkWell(
+      child: Padding(
+        padding: const EdgeInsets.only(right: 2),
+        child: Material(
+          color: active ? theme.colorScheme.surfaceContainer : Colors.transparent,
           borderRadius: const BorderRadius.vertical(top: Radius.circular(8)),
-          onTap: onTap,
-          child: GestureDetector(
-            onTertiaryTapUp: (_) => onClose(),
-            child: Container(
-              constraints: const BoxConstraints(maxWidth: 260),
-              padding: const EdgeInsets.only(left: 12, right: 2),
-              child: Row(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  Icon(Icons.source_outlined, size: 16, color: active ? theme.colorScheme.primary : null),
-                  const SizedBox(width: 8),
-                  Flexible(
-                    child: Text.rich(
-                      TextSpan(
-                        children: [
-                          TextSpan(
-                            text: p.basename(path),
-                            style: TextStyle(fontWeight: active ? FontWeight.w600 : FontWeight.normal),
-                          ),
-                          if (branch != null)
+          clipBehavior: Clip.antiAlias,
+          child: InkWell(
+            onTap: onTap,
+            child: GestureDetector(
+              onTertiaryTapUp: (_) => onClose(),
+              child: Container(
+                constraints: const BoxConstraints(maxWidth: 260),
+                padding: const EdgeInsets.only(left: 12, right: 2),
+                decoration: BoxDecoration(
+                  border: Border(
+                    top: BorderSide(color: active ? theme.colorScheme.primary : Colors.transparent, width: 2),
+                  ),
+                ),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Icon(Icons.source_outlined, size: 16, color: active ? theme.colorScheme.primary : null),
+                    const SizedBox(width: 8),
+                    Flexible(
+                      child: Text.rich(
+                        TextSpan(
+                          children: [
                             TextSpan(
-                              text: '  $branch',
-                              style: theme.textTheme.bodySmall?.copyWith(color: theme.colorScheme.onSurfaceVariant),
+                              text: p.basename(path),
+                              style: TextStyle(fontWeight: active ? FontWeight.w600 : FontWeight.normal),
                             ),
-                        ],
+                            if (branch != null)
+                              TextSpan(
+                                text: '  $branch',
+                                style: theme.textTheme.bodySmall?.copyWith(color: theme.colorScheme.onSurfaceVariant),
+                              ),
+                          ],
+                        ),
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
                       ),
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
                     ),
-                  ),
-                  if (dirty)
-                    Padding(
-                      padding: const EdgeInsets.only(left: 6),
-                      child: Icon(Icons.circle, size: 7, color: theme.colorScheme.tertiary),
+                    if (dirty)
+                      Padding(
+                        padding: const EdgeInsets.only(left: 6),
+                        child: Icon(Icons.circle, size: 7, color: theme.colorScheme.tertiary),
+                      ),
+                    IconButton(
+                      tooltip: 'Close tab (Ctrl+W)',
+                      onPressed: onClose,
+                      icon: const Icon(Icons.close, size: 15),
+                      visualDensity: VisualDensity.compact,
                     ),
-                  IconButton(
-                    tooltip: 'Close tab (Ctrl+W)',
-                    onPressed: onClose,
-                    icon: const Icon(Icons.close, size: 15),
-                    visualDensity: VisualDensity.compact,
-                  ),
-                ],
+                  ],
+                ),
               ),
             ),
           ),

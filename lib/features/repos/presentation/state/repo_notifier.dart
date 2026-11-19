@@ -240,7 +240,8 @@ class RepoNotifier extends Notifier<RepoState> {
     // Los ficheros abiertos pueden haber dejado de existir/cambiar.
     if (action is CommitAction || action is StashAction || action is DiscardAction ||
         action is ResetAction || action is CheckoutAction || action is CheckoutRemoteAction ||
-        action is CheckoutDetachedAction || action is AbortOperationAction) {
+        action is CheckoutDetachedAction || action is AbortOperationAction || action is RebaseAction ||
+        action is ContinueOperationAction || action is SkipOperationAction || action is PullAction) {
       if (state.openFile?.source != DiffSource.commit) closeFile();
     }
     await refresh(forceHistory: true);

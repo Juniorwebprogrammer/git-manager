@@ -23,9 +23,11 @@ class FetchAction extends GitAction {
 }
 
 class PullAction extends GitAction {
-  const PullAction();
+  /// `pull --rebase` en lugar de merge.
+  final bool rebase;
+  const PullAction({this.rebase = false});
   @override
-  String get label => 'Pulling…';
+  String get label => rebase ? 'Pulling (rebase)…' : 'Pulling…';
   @override
   bool get isNetwork => true;
 }
@@ -213,6 +215,30 @@ class PushTagAction extends GitAction {
   String get label => 'Pushing tag $name…';
   @override
   bool get isNetwork => true;
+}
+
+/// Rebase de [branch] (por defecto la rama actual) sobre [onto].
+/// Si se indica [branch], git hace checkout de esa rama al terminar.
+class RebaseAction extends GitAction {
+  final String onto;
+  final String? branch;
+  const RebaseAction(this.onto, {this.branch});
+  @override
+  String get label => 'Rebasing onto $onto…';
+}
+
+/// Continúa un rebase/cherry-pick/revert/merge tras resolver conflictos.
+class ContinueOperationAction extends GitAction {
+  const ContinueOperationAction();
+  @override
+  String get label => 'Continuing…';
+}
+
+/// Salta el commit actual de un rebase/cherry-pick/revert.
+class SkipOperationAction extends GitAction {
+  const SkipOperationAction();
+  @override
+  String get label => 'Skipping commit…';
 }
 
 /// Aborta un merge/cherry-pick/revert/rebase que quedó a medias.

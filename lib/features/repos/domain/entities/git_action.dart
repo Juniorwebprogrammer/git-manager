@@ -1,6 +1,14 @@
 import 'file_change.dart';
 
-enum ResetMode { soft, mixed, hard }
+enum ResetMode {
+  soft,
+  mixed,
+  hard,
+
+  /// Mueve la rama conservando los cambios locales; falla (sin perder nada)
+  /// si chocan. Es lo que usa "Undo".
+  keep,
+}
 
 /// Todas las operaciones de escritura que la UI puede pedir sobre un
 /// repositorio. La capa de datos traduce cada una a comandos git.
@@ -259,7 +267,11 @@ class DiscardAction extends GitAction {
 class CommitAction extends GitAction {
   final String message;
   final bool amend;
-  const CommitAction(this.message, {this.amend = false});
+
+  /// Firmar (GPG/SSH): true = `-S`, false = `--no-gpg-sign`, null = lo que
+  /// diga `commit.gpgsign`.
+  final bool? sign;
+  const CommitAction(this.message, {this.amend = false, this.sign});
   @override
   String get label => 'Committing…';
 }
@@ -339,4 +351,24 @@ class AbortOperationAction extends GitAction {
   const AbortOperationAction();
   @override
   String get label => 'Aborting…';
+}
+
+/// Quita un worktree (otra carpeta con una rama abierta del mismo repo).
+class RemoveWorktreeAction extends GitAction {
+  final String path;
+  const RemoveWorktreeAction(this.path);
+  @override
+  String get label => 'Removing worktree…';
+}
+
+enum SigningFormat { gpg, ssh }
+
+/// Configura la firma de commits en este repo (`git config --local`).
+class ConfigureSigningAction extends GitAction {
+  final SigningFormat format;
+  final String key;
+  final bool signByDefault;
+  const ConfigureSigningAction({required this.format, required this.key, required this.signByDefault});
+  @override
+  String get label => 'Saving signing settings…';
 }

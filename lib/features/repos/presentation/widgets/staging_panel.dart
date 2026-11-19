@@ -7,7 +7,9 @@ import '../../domain/entities/file_diff.dart';
 import '../../domain/entities/git_action.dart';
 import '../../domain/entities/repo_snapshot.dart';
 import '../../domain/repositories/git_repository.dart';
+import '../../domain/entities/repo_extras.dart';
 import '../state/repo_notifier.dart';
+import 'signing_dialog.dart';
 import 'ui_helpers.dart';
 
 /// Panel derecho cuando está seleccionado "WIP": stage/unstage y commit.
@@ -23,36 +25,68 @@ class StagingPanel extends ConsumerStatefulWidget {
 class _StagingPanelState extends ConsumerState<StagingPanel> {
   final _summary = TextEditingController();
   final _description = TextEditingController();
+  final _scope = TextEditingController();
   bool _amend = false;
+
+  /// Tipo de Conventional Commit (feat, fix…); null = sin prefijo.
+  String? _type;
+  bool _breaking = false;
+
+  /// Firmar este commit; null = lo que diga la configuración del repo.
+  bool? _sign;
+  String? _template;
 
   @override
   void initState() {
     super.initState();
     _summary.addListener(() => setState(() {}));
+    _scope.addListener(() => setState(() {}));
+    // Plantilla de `commit.template`: rellena la descripción si está vacía.
+    ref.listenManual(commitTemplateProvider(widget.repo), (_, next) {
+      final template = next.value;
+      if (template != null && _template == null && _description.text.isEmpty) {
+        _description.text = template;
+      }
+      _template = template;
+    }, fireImmediately: true);
   }
 
   @override
   void dispose() {
     _summary.dispose();
     _description.dispose();
+    _scope.dispose();
     super.dispose();
   }
 
+  String get _composedSummary => _summary.text.trim().isEmpty
+      ? ''
+      : composeConventionalSummary(type: _type, scope: _scope.text, breaking: _breaking, summary: _summary.text);
+
   Future<void> _commit(RepoSnapshot snapshot) async {
-    final summary = _summary.text.trim();
-    final description = _description.text.trim();
+    final summary = _composedSummary;
+    var description = _description.text.trim();
+    if (description == _template) description = ''; // plantilla sin rellenar
     final message = description.isEmpty ? summary : '$summary\n\n$description';
+    final config = ref.read(signingConfigProvider(widget.repo)).value;
+    final sign = _sign == null || _sign == (config?.signByDefault ?? false) ? null : _sign;
     final ok = await runGitAction(
       context,
       ref,
       widget.repo,
-      CommitAction(message, amend: _amend),
+      CommitAction(message, amend: _amend, sign: sign),
       successMessage: _amend ? 'Commit amended' : 'Committed',
     );
     if (ok && mounted) {
       _summary.clear();
-      _description.clear();
-      setState(() => _amend = false);
+      _scope.clear();
+      _description.text = _template ?? '';
+      setState(() {
+        _amend = false;
+        _type = null;
+        _breaking = false;
+        _sign = null;
+      });
     }
   }
 
@@ -82,178 +116,208 @@ class _StagingPanelState extends ConsumerState<StagingPanel> {
     void stageAll() => runGitAction(context, ref, widget.repo, const StageAllAction());
     void unstageAll() => runGitAction(context, ref, widget.repo, const UnstageAllAction());
 
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.stretch,
-      children: [
-        if (snapshot.pendingOperation != PendingOperation.none) _PendingBanner(repo: widget.repo, snapshot: snapshot),
-        _ListHeader(
-          title: 'Unstaged Files',
-          count: snapshot.unstaged.length,
-          actionLabel: 'Stage all',
-          actionTooltip: 'Stage all changes',
-          actionIcon: Icons.add_task,
-          onAction: snapshot.unstaged.isEmpty || busy ? null : stageAll,
-        ),
-        Expanded(
-          child: _FileList(
-            changes: snapshot.unstaged,
-            empty: 'No unstaged changes',
-            isSelected: (c) => open?.source == DiffSource.unstaged && open?.path == c.path,
-            onOpen: (c) => ref
-                .read(repoNotifierProvider(widget.repo).notifier)
-                .openFile(
-                  DiffTarget(
-                    source: DiffSource.unstaged,
-                    path: c.path,
-                    untracked: c.type == ChangeType.untracked,
-                    conflicted: c.type == ChangeType.conflicted,
-                    deleted: c.type == ChangeType.deleted,
-                  ),
-                ),
-            actions: (c) => [
-              _MiniAction(
-                icon: Icons.delete_outline,
-                tooltip: 'Discard changes',
-                onPressed: busy
-                    ? null
-                    : () async {
-                        final ok = await confirmDialog(
-                          context,
-                          title: 'Discard changes',
-                          message: c.type == ChangeType.untracked
-                              ? 'Delete the untracked file "${c.path}"? This cannot be undone.'
-                              : 'Discard your changes to "${c.path}"? This cannot be undone.',
-                          confirmLabel: 'Discard',
-                          destructive: true,
-                        );
-                        if (ok && context.mounted) {
-                          await runGitAction(context, ref, widget.repo, DiscardAction([c]));
-                        }
-                      },
-              ),
-              _MiniAction(
-                icon: Icons.add,
-                tooltip: 'Stage file',
-                onPressed: busy ? null : () => runGitAction(context, ref, widget.repo, StageAction([c.path])),
-              ),
-            ],
-          ),
-        ),
-        const Divider(height: 1),
-        _ListHeader(
-          title: 'Staged Files',
-          count: snapshot.staged.length,
-          actionLabel: 'Unstage all',
-          actionTooltip: 'Unstage all changes',
-          actionIcon: Icons.remove_done,
-          onAction: snapshot.staged.isEmpty || busy ? null : unstageAll,
-        ),
-        Expanded(
-          child: _FileList(
-            changes: snapshot.staged,
-            empty: 'Stage files to include them in the commit',
-            isSelected: (c) => open?.source == DiffSource.staged && open?.path == c.path,
-            onOpen: (c) => ref
-                .read(repoNotifierProvider(widget.repo).notifier)
-                .openFile(
-                  DiffTarget(
-                    source: DiffSource.staged,
-                    path: c.path,
-                    oldPath: c.oldPath,
-                    deleted: c.type == ChangeType.deleted,
-                  ),
-                ),
-            actions: (c) => [
-              _MiniAction(
-                icon: Icons.remove,
-                tooltip: 'Unstage file',
-                onPressed: busy
-                    ? null
-                    : () => runGitAction(
-                        context,
-                        ref,
-                        widget.repo,
-                        UnstageAction([if (c.oldPath != null) c.oldPath!, c.path]),
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final maxCommitHeight = constraints.maxHeight * 0.55;
+        return Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            if (snapshot.pendingOperation != PendingOperation.none)
+              _PendingBanner(repo: widget.repo, snapshot: snapshot),
+            _ListHeader(
+              title: 'Unstaged Files',
+              count: snapshot.unstaged.length,
+              actionLabel: 'Stage all',
+              actionTooltip: 'Stage all changes',
+              actionIcon: Icons.add_task,
+              onAction: snapshot.unstaged.isEmpty || busy ? null : stageAll,
+            ),
+            Expanded(
+              child: _FileList(
+                onMenu: (c, pos) => showFileMenu(context, ref, widget.repo, c.path, pos),
+                changes: snapshot.unstaged,
+                empty: 'No unstaged changes',
+                isSelected: (c) => open?.source == DiffSource.unstaged && open?.path == c.path,
+                onOpen: (c) => ref
+                    .read(repoNotifierProvider(widget.repo).notifier)
+                    .openFile(
+                      DiffTarget(
+                        source: DiffSource.unstaged,
+                        path: c.path,
+                        untracked: c.type == ChangeType.untracked,
+                        conflicted: c.type == ChangeType.conflicted,
+                        deleted: c.type == ChangeType.deleted,
                       ),
-              ),
-            ],
-          ),
-        ),
-        if (!_continuesInstead(snapshot)) ...[
-          const Divider(height: 1),
-          Container(
-            color: theme.colorScheme.surfaceContainerLow,
-            padding: const EdgeInsets.all(12),
-            child: CallbackShortcuts(
-              bindings: {
-                const SingleActivator(LogicalKeyboardKey.enter, control: true): () {
-                  if (_canCommit(snapshot) && !busy) _commit(snapshot);
-                },
-              },
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.stretch,
-                children: [
-                  Row(
-                    children: [
-                      Text('Commit', style: theme.textTheme.titleSmall),
-                      const Spacer(),
-                      Text('Amend', style: theme.textTheme.bodySmall),
-                      Switch(
-                        value: _amend,
-                        onChanged: snapshot.headSha == null ? null : (v) => setState(() => _amend = v),
-                      ),
-                    ],
-                  ),
-                  const SizedBox(height: 6),
-                  TextField(
-                    controller: _summary,
-                    maxLength: 72,
-                    decoration: InputDecoration(
-                      isDense: true,
-                      border: const OutlineInputBorder(),
-                      hintText: _amend
-                          ? 'Leave empty to keep the previous message'
-                          : snapshot.pendingOperation == PendingOperation.merge
-                          ? 'Leave empty to use the merge message'
-                          : 'Summary (required)',
                     ),
+                actions: (c) => [
+                  _MiniAction(
+                    icon: Icons.delete_outline,
+                    tooltip: 'Discard changes',
+                    onPressed: busy
+                        ? null
+                        : () async {
+                            final ok = await confirmDialog(
+                              context,
+                              title: 'Discard changes',
+                              message: c.type == ChangeType.untracked
+                                  ? 'Delete the untracked file "${c.path}"? This cannot be undone.'
+                                  : 'Discard your changes to "${c.path}"? This cannot be undone.',
+                              confirmLabel: 'Discard',
+                              destructive: true,
+                            );
+                            if (ok && context.mounted) {
+                              await runGitAction(context, ref, widget.repo, DiscardAction([c]));
+                            }
+                          },
                   ),
-                  TextField(
-                    controller: _description,
-                    minLines: 2,
-                    maxLines: 5,
-                    decoration: const InputDecoration(
-                      isDense: true,
-                      border: OutlineInputBorder(),
-                      hintText: 'Description',
-                    ),
-                  ),
-                  const SizedBox(height: 10),
-                  FilledButton.icon(
-                    onPressed: _canCommit(snapshot) && !busy ? () => _commit(snapshot) : null,
-                    icon: const Icon(Icons.check),
-                    label: Text(
-                      _amend
-                          ? 'Amend previous commit'
-                          : snapshot.staged.isEmpty
-                          ? 'Stage files to commit'
-                          : 'Commit ${snapshot.staged.length} file${snapshot.staged.length == 1 ? '' : 's'}',
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                    ),
-                  ),
-                  const SizedBox(height: 4),
-                  Text(
-                    'Ctrl+Enter to commit',
-                    textAlign: TextAlign.center,
-                    style: theme.textTheme.labelSmall?.copyWith(color: theme.colorScheme.onSurfaceVariant),
+                  _MiniAction(
+                    icon: Icons.add,
+                    tooltip: 'Stage file',
+                    onPressed: busy ? null : () => runGitAction(context, ref, widget.repo, StageAction([c.path])),
                   ),
                 ],
               ),
             ),
-          ),
-        ],
-      ],
+            const Divider(height: 1),
+            _ListHeader(
+              title: 'Staged Files',
+              count: snapshot.staged.length,
+              actionLabel: 'Unstage all',
+              actionTooltip: 'Unstage all changes',
+              actionIcon: Icons.remove_done,
+              onAction: snapshot.staged.isEmpty || busy ? null : unstageAll,
+            ),
+            Expanded(
+              child: _FileList(
+                onMenu: (c, pos) => showFileMenu(context, ref, widget.repo, c.path, pos),
+                changes: snapshot.staged,
+                empty: 'Stage files to include them in the commit',
+                isSelected: (c) => open?.source == DiffSource.staged && open?.path == c.path,
+                onOpen: (c) => ref
+                    .read(repoNotifierProvider(widget.repo).notifier)
+                    .openFile(
+                      DiffTarget(
+                        source: DiffSource.staged,
+                        path: c.path,
+                        oldPath: c.oldPath,
+                        deleted: c.type == ChangeType.deleted,
+                      ),
+                    ),
+                actions: (c) => [
+                  _MiniAction(
+                    icon: Icons.remove,
+                    tooltip: 'Unstage file',
+                    onPressed: busy
+                        ? null
+                        : () => runGitAction(
+                            context,
+                            ref,
+                            widget.repo,
+                            UnstageAction([if (c.oldPath != null) c.oldPath!, c.path]),
+                          ),
+                  ),
+                ],
+              ),
+            ),
+            if (!_continuesInstead(snapshot)) ...[
+              const Divider(height: 1),
+              ConstrainedBox(
+                // En ventanas bajas la caja de commit no se come las listas de
+                // ficheros: como mucho la mitad del alto, con scroll propio.
+                constraints: BoxConstraints(maxHeight: maxCommitHeight),
+                child: SingleChildScrollView(
+                  child: Container(
+                    color: theme.colorScheme.surfaceContainerLow,
+                    padding: const EdgeInsets.all(12),
+                    child: CallbackShortcuts(
+                      bindings: {
+                        const SingleActivator(LogicalKeyboardKey.enter, control: true): () {
+                          if (_canCommit(snapshot) && !busy) _commit(snapshot);
+                        },
+                      },
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.stretch,
+                        children: [
+                          _CommitOptions(
+                            repo: widget.repo,
+                            amend: _amend,
+                            sign: _sign,
+                            canAmend: snapshot.headSha != null,
+                            onAmend: (v) => setState(() => _amend = v),
+                            onSign: (v) => setState(() => _sign = v),
+                          ),
+                          const SizedBox(height: 6),
+                          _ConventionalRow(
+                            type: _type,
+                            scope: _scope,
+                            breaking: _breaking,
+                            onType: (t) => setState(() => _type = t),
+                            onBreaking: (b) => setState(() => _breaking = b),
+                          ),
+                          const SizedBox(height: 6),
+                          TextField(
+                            controller: _summary,
+                            maxLength: 72,
+                            decoration: InputDecoration(
+                              isDense: true,
+                              border: const OutlineInputBorder(),
+                              hintText: _amend
+                                  ? 'Leave empty to keep the previous message'
+                                  : snapshot.pendingOperation == PendingOperation.merge
+                                  ? 'Leave empty to use the merge message'
+                                  : 'Summary (required)',
+                            ),
+                          ),
+                          if (_type != null && _summary.text.trim().isNotEmpty)
+                            Padding(
+                              padding: const EdgeInsets.only(bottom: 6),
+                              child: Text(
+                                _composedSummary,
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                                style: monoStyle(context, size: 12, color: theme.colorScheme.primary),
+                              ),
+                            ),
+                          TextField(
+                            controller: _description,
+                            minLines: 2,
+                            maxLines: 5,
+                            decoration: const InputDecoration(
+                              isDense: true,
+                              border: OutlineInputBorder(),
+                              hintText: 'Description',
+                            ),
+                          ),
+                          const SizedBox(height: 10),
+                          FilledButton.icon(
+                            onPressed: _canCommit(snapshot) && !busy ? () => _commit(snapshot) : null,
+                            icon: const Icon(Icons.check),
+                            label: Text(
+                              _amend
+                                  ? 'Amend previous commit'
+                                  : snapshot.staged.isEmpty
+                                  ? 'Stage files to commit'
+                                  : 'Commit ${snapshot.staged.length} file${snapshot.staged.length == 1 ? '' : 's'}',
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                            ),
+                          ),
+                          const SizedBox(height: 4),
+                          Text(
+                            'Ctrl+Enter to commit',
+                            textAlign: TextAlign.center,
+                            style: theme.textTheme.labelSmall?.copyWith(color: theme.colorScheme.onSurfaceVariant),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+            ],
+          ],
+        );
+      },
     );
   }
 }
@@ -444,6 +508,7 @@ class FileChangeTile extends StatelessWidget {
   final FileChange change;
   final bool selected;
   final VoidCallback onTap;
+  final GestureTapDownCallback? onSecondaryTapDown;
   final List<Widget> actions;
 
   const FileChangeTile({
@@ -451,6 +516,7 @@ class FileChangeTile extends StatelessWidget {
     required this.change,
     required this.selected,
     required this.onTap,
+    this.onSecondaryTapDown,
     this.actions = const [],
   });
 
@@ -461,6 +527,7 @@ class FileChangeTile extends StatelessWidget {
       color: selected ? theme.colorScheme.primary.withValues(alpha: 0.14) : Colors.transparent,
       child: InkWell(
         onTap: onTap,
+        onSecondaryTapDown: onSecondaryTapDown,
         child: Padding(
           padding: const EdgeInsets.only(left: 12, right: 4),
           child: SizedBox(
@@ -505,6 +572,7 @@ class _FileList extends StatelessWidget {
   final bool Function(FileChange) isSelected;
   final void Function(FileChange) onOpen;
   final List<Widget> Function(FileChange) actions;
+  final void Function(FileChange change, Offset position)? onMenu;
 
   const _FileList({
     required this.changes,
@@ -512,6 +580,7 @@ class _FileList extends StatelessWidget {
     required this.isSelected,
     required this.onOpen,
     required this.actions,
+    this.onMenu,
   });
 
   @override
@@ -528,8 +597,169 @@ class _FileList extends StatelessWidget {
       itemCount: changes.length,
       itemBuilder: (context, i) {
         final c = changes[i];
-        return FileChangeTile(change: c, selected: isSelected(c), onTap: () => onOpen(c), actions: actions(c));
+        return FileChangeTile(
+          change: c,
+          selected: isSelected(c),
+          onTap: () => onOpen(c),
+          onSecondaryTapDown: onMenu == null ? null : (d) => onMenu!(c, d.globalPosition),
+          actions: actions(c),
+        );
       },
+    );
+  }
+}
+
+/// Fila "Commit" con los interruptores de firma y amend.
+class _CommitOptions extends ConsumerWidget {
+  final RepoHandle repo;
+  final bool amend;
+  final bool? sign;
+  final bool canAmend;
+  final ValueChanged<bool> onAmend;
+  final ValueChanged<bool> onSign;
+
+  const _CommitOptions({
+    required this.repo,
+    required this.amend,
+    required this.sign,
+    required this.canAmend,
+    required this.onAmend,
+    required this.onSign,
+  });
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final theme = Theme.of(context);
+    final config = ref.watch(signingConfigProvider(repo)).value ?? const SigningConfig();
+    final signing = sign ?? config.signByDefault;
+    final kind = config.format == SigningFormat.ssh ? 'SSH' : 'GPG';
+
+    return Row(
+      children: [
+        Text('Commit', style: theme.textTheme.titleSmall),
+        const SizedBox(width: 8),
+        Expanded(
+          child: Wrap(
+            alignment: WrapAlignment.end,
+            crossAxisAlignment: WrapCrossAlignment.center,
+            spacing: 4,
+            runSpacing: 4,
+            children: [
+              Tooltip(
+                message: config.hasKey
+                    ? (signing ? 'This commit will be signed ($kind)' : 'Sign this commit with your $kind key')
+                    : 'Set up commit signing first',
+                child: FilterChip(
+                  avatar: Icon(signing ? Icons.verified_user : Icons.verified_user_outlined, size: 16),
+                  label: const Text('Sign'),
+                  selected: signing && config.hasKey,
+                  showCheckmark: false,
+                  visualDensity: VisualDensity.compact,
+                  onSelected: config.hasKey ? onSign : (_) => showSigningDialog(context, ref, repo),
+                ),
+              ),
+              IconButton(
+                tooltip: 'Signing settings…',
+                onPressed: () => showSigningDialog(context, ref, repo),
+                icon: const Icon(Icons.tune, size: 18),
+                visualDensity: VisualDensity.compact,
+                padding: EdgeInsets.zero,
+                constraints: const BoxConstraints(minWidth: 28, minHeight: 28),
+              ),
+              Tooltip(
+                message: 'Replace the last commit instead of creating a new one',
+                child: FilterChip(
+                  avatar: const Icon(Icons.edit_note, size: 16),
+                  label: const Text('Amend'),
+                  selected: amend,
+                  showCheckmark: false,
+                  visualDensity: VisualDensity.compact,
+                  onSelected: canAmend ? onAmend : null,
+                ),
+              ),
+            ],
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+/// Tipo / scope / breaking de Conventional Commits.
+class _ConventionalRow extends StatelessWidget {
+  final String? type;
+  final TextEditingController scope;
+  final bool breaking;
+  final ValueChanged<String?> onType;
+  final ValueChanged<bool> onBreaking;
+
+  const _ConventionalRow({
+    required this.type,
+    required this.scope,
+    required this.breaking,
+    required this.onType,
+    required this.onBreaking,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return Row(
+      children: [
+        SizedBox(
+          width: 104,
+          child: DropdownButtonFormField<String?>(
+            initialValue: type,
+            isDense: true,
+            isExpanded: true,
+            decoration: const InputDecoration(contentPadding: EdgeInsets.symmetric(horizontal: 8, vertical: 8)),
+            hint: const Text('type'),
+            // Cerrado: "type" en gris si no hay tipo; abierto: "— none" + tipos.
+            selectedItemBuilder: (context) => [
+              Text('type', style: TextStyle(color: theme.colorScheme.onSurfaceVariant)),
+              for (final t in conventionalTypes.keys) Text(t, style: monoStyle(context, size: 13)),
+            ],
+            items: [
+              const DropdownMenuItem<String?>(value: null, child: Text('— none')),
+              for (final e in conventionalTypes.entries)
+                DropdownMenuItem<String?>(
+                  value: e.key,
+                  child: Tooltip(
+                    message: e.value,
+                    child: Text(e.key, style: monoStyle(context, size: 13)),
+                  ),
+                ),
+            ],
+            onChanged: onType,
+          ),
+        ),
+        const SizedBox(width: 6),
+        Expanded(
+          child: TextField(
+            controller: scope,
+            enabled: type != null,
+            style: const TextStyle(fontSize: 13),
+            decoration: const InputDecoration(
+              hintText: 'scope (optional)',
+              contentPadding: EdgeInsets.symmetric(horizontal: 8, vertical: 10),
+            ),
+          ),
+        ),
+        const SizedBox(width: 4),
+        Tooltip(
+          message: 'Breaking change (adds "!")',
+          child: FilterChip(
+            label: Text(
+              '!',
+              style: TextStyle(fontWeight: FontWeight.w800, color: breaking ? theme.colorScheme.error : null),
+            ),
+            selected: breaking,
+            showCheckmark: false,
+            visualDensity: VisualDensity.compact,
+            onSelected: type == null ? null : onBreaking,
+          ),
+        ),
+      ],
     );
   }
 }

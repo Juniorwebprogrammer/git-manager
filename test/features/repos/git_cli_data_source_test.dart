@@ -454,4 +454,186 @@ void main() {
       expect(await cli.remoteUrl(repo), remote);
     });
   });
+
+  group('undo/redo, worktrees, history, blame, compare, signing', () {
+    Future<void> commitFile(String name, String content, String message) async {
+      await write(name, content);
+      await act(const StageAllAction());
+      await act(CommitAction(message));
+    }
+
+    Future<String?> headSha() async => (await cli.snapshot(repo)).headSha;
+
+    test('undo/redo a commit keeps its changes staged', () async {
+      final before = await headSha();
+      await commitFile('u.txt', 'u\n', 'add u');
+      final after = await headSha();
+
+      final plan = (await cli.undoPlan(repo))!;
+      expect(plan.label, contains("Undo commit 'add u'"));
+      await act(plan.undo);
+      var snap = await cli.snapshot(repo);
+      expect(snap.headSha, before);
+      expect(snap.staged.single.path, 'u.txt');
+
+      await act(plan.redo);
+      snap = await cli.snapshot(repo);
+      expect(snap.headSha, after);
+      expect(snap.hasChanges, isFalse);
+    });
+
+    test('undo an amend restores the original commit', () async {
+      await commitFile('a1.txt', '1\n', 'original');
+      final original = await headSha();
+      await write('a1.txt', '2\n');
+      await act(const StageAllAction());
+      await act(const CommitAction('amended', amend: true));
+
+      final plan = (await cli.undoPlan(repo))!;
+      expect(plan.label, contains('Undo amend of'));
+      await act(plan.undo);
+      expect(await headSha(), original);
+    });
+
+    test('undo/redo a checkout', () async {
+      await act(const CreateBranchAction('feature'));
+      final plan = (await cli.undoPlan(repo))!;
+      expect(plan.label, startsWith('Undo checkout of feature'));
+      await act(plan.undo);
+      expect((await cli.snapshot(repo)).currentBranch, 'main');
+      await act(plan.redo);
+      expect((await cli.snapshot(repo)).currentBranch, 'feature');
+    });
+
+    test('undo a merge without touching unrelated local changes', () async {
+      final before = await headSha();
+      await act(const CreateBranchAction('other'));
+      await commitFile('o.txt', 'o\n', 'other work');
+      await act(const CheckoutAction('main'));
+      await act(const MergeAction('other'));
+      await write('a.txt', 'local edit\n');
+
+      final plan = (await cli.undoPlan(repo))!;
+      expect(plan.label, 'Undo merge of other');
+      await act(plan.undo);
+      expect(await headSha(), before);
+      expect(await File('$repo/a.txt').readAsString(), 'local edit\n');
+    });
+
+    test('branches open in another worktree are reported and explained', () async {
+      final wt = '${tmp.path}/wt';
+      await runner.run(['worktree', 'add', '-q', '-b', 'wtbranch', wt], workingDirectory: repo);
+      var snap = await cli.snapshot(repo);
+      expect(snap.worktreeBranches.keys, ['wtbranch']);
+      expect(snap.worktreeBranches['wtbranch'], endsWith('/wt'));
+
+      await expectLater(
+        act(const CheckoutAction('wtbranch')),
+        throwsA(isA<GitCommandException>()
+            .having((e) => e.message, 'message', contains('already open in another folder'))),
+      );
+
+      await act(RemoveWorktreeAction(wt));
+      snap = await cli.snapshot(repo);
+      expect(snap.worktreeBranches, isEmpty);
+      await act(const CheckoutAction('wtbranch'));
+    });
+
+    test('file history follows renames', () async {
+      await commitFile('old.txt', 'v1\n', 'create');
+      await commitFile('old.txt', 'v2\n', 'edit');
+      await runner.run(['mv', 'old.txt', 'new.txt'], workingDirectory: repo);
+      await act(const CommitAction('rename'));
+
+      final history = await cli.fileHistory(repo, 'new.txt');
+      expect(history.map((h) => h.commit.subject), ['rename', 'edit', 'create']);
+      expect(history.first.change, ChangeType.renamed);
+      expect(history.first.path, 'new.txt');
+      expect(history.last.path, 'old.txt');
+    });
+
+    test('blame attributes each line, including uncommitted ones', () async {
+      await commitFile('b.txt', 'one\ntwo\n', 'first lines');
+      await commitFile('b.txt', 'one\ntwo\nthree\n', 'third line');
+      await write('b.txt', 'one\nTWO\nthree\n');
+
+      final lines = await cli.blame(repo, 'b.txt');
+      expect(lines.map((l) => l.text), ['one', 'TWO', 'three']);
+      expect(lines[0].summary, 'first lines');
+      expect(lines[0].author, 'Test User');
+      expect(lines[1].isUncommitted, isTrue);
+      expect(lines[2].summary, 'third line');
+
+      final atHead = await cli.blame(repo, 'b.txt', revision: 'HEAD');
+      expect(atHead[1].text, 'two');
+    });
+
+    test('compares two branches', () async {
+      await act(const CreateBranchAction('cmp'));
+      await commitFile('c1.txt', 'c\n', 'cmp 1');
+      await write('a.txt', 'changed\n');
+      await act(const StageAllAction());
+      await act(const CommitAction('cmp 2'));
+      final changes = await cli.comparison(repo, 'main', 'cmp');
+      expect(changes.map((c) => c.path).toSet(), {'c1.txt', 'a.txt'});
+      expect(changes.firstWhere((c) => c.path == 'c1.txt').type, ChangeType.added);
+    });
+
+    test('commit template is read without comment lines', () async {
+      await File('${tmp.path}/template.txt').writeAsString('# Explain why\n\nWhy:\n# more\nRefs:\n');
+      await runner.run(['config', 'commit.template', '${tmp.path}/template.txt'], workingDirectory: repo);
+      expect(await cli.commitTemplate(repo), 'Why:\nRefs:');
+    });
+
+    test('signs commits with an SSH key and reports the signature', () async {
+      // Aislado de la config global del usuario (que puede tener gpg.* roto).
+      await File('${tmp.path}/global.gitconfig').writeAsString('');
+      final runner = GitRunner(environment: {
+        'GIT_CONFIG_GLOBAL': '${tmp.path}/global.gitconfig',
+        'GIT_CONFIG_NOSYSTEM': '1',
+      });
+      final cli = GitCliDataSource(runner);
+      Future<void> act(GitAction a) => cli.run(repo, a, identity);
+      Future<String?> headSha() async => (await cli.snapshot(repo)).headSha;
+      Future<void> commitFile(String name, String content, String message) async {
+        await File('$repo/$name').writeAsString(content);
+        await act(const StageAllAction());
+        await act(CommitAction(message));
+      }
+
+      final key = '${tmp.path}/id_test';
+      await Process.run('ssh-keygen', ['-q', '-t', 'ed25519', '-N', '', '-C', 'test', '-f', key]);
+      final pub = (await File('$key.pub').readAsString()).trim();
+      await File('${tmp.path}/allowed').writeAsString('test@example.com $pub\n');
+      await runner.run(['config', 'gpg.ssh.allowedSignersFile', '${tmp.path}/allowed'], workingDirectory: repo);
+
+      await act(ConfigureSigningAction(format: SigningFormat.ssh, key: '$key.pub', signByDefault: true));
+      final config = await cli.signingConfig(repo);
+      expect(config.signByDefault, isTrue);
+      expect(config.format, SigningFormat.ssh);
+      expect(config.key, '$key.pub');
+
+      await commitFile('s.txt', 's\n', 'signed by default');
+      var detail = await cli.commitDetail(repo, (await headSha())!);
+      expect(detail.signature, SignatureStatus.good);
+      expect(detail.message, 'signed by default');
+
+      await write('s.txt', 't\n');
+      await act(const StageAllAction());
+      await act(const CommitAction('explicitly unsigned', sign: false));
+      detail = await cli.commitDetail(repo, (await headSha())!);
+      expect(detail.signature, SignatureStatus.none);
+    });
+  });
+
+  test('explains an invalid gpg.format in the git config', () async {
+    await File('${tmp.path}/broken.gitconfig').writeAsString('[gpg]\n\tformat = \n');
+    final broken = GitCliDataSource(GitRunner(environment: {'GIT_CONFIG_GLOBAL': '${tmp.path}/broken.gitconfig'}));
+    await write('a.txt', 'x\n');
+    await broken.run(repo, const StageAllAction(), identity);
+    await expectLater(
+      broken.run(repo, const CommitAction('signed', sign: true), identity),
+      throwsA(isA<GitCommandException>().having((e) => e.message, 'message', contains('invalid value for "gpg.format"'))),
+    );
+  });
 }

@@ -19,6 +19,9 @@ class DiffTarget {
   /// Fichero con conflictos de merge/rebase sin resolver.
   final bool conflicted;
 
+  /// Texto para la cabecera del visor (p. ej. "main ↔ feature" al comparar).
+  final String? title;
+
   const DiffTarget({
     required this.source,
     required this.path,
@@ -28,6 +31,7 @@ class DiffTarget {
     this.untracked = false,
     this.deleted = false,
     this.conflicted = false,
+    this.title,
   });
 
   /// Se puede hacer stage/unstage/descartar por trozos o por líneas.

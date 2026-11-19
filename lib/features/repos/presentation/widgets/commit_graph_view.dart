@@ -203,6 +203,13 @@ class _CommitGraphViewState extends ConsumerState<CommitGraphView> {
                             cols: cols,
                             isHead: commit.sha == snapshot?.headSha,
                             selected: state.selectedSha == commit.sha,
+                            compareRole: state.compare == null
+                                ? null
+                                : state.compare!.base == commit.sha
+                                    ? 'BASE'
+                                    : state.compare!.target == commit.sha
+                                        ? 'TARGET'
+                                        : null,
                             currentBranch: snapshot?.currentBranch,
                           ),
                         );
@@ -365,6 +372,9 @@ class _CommitRow extends ConsumerWidget {
   final bool selected;
   final String? currentBranch;
 
+  /// 'BASE' / 'TARGET' si la fila forma parte de una comparación.
+  final String? compareRole;
+
   const _CommitRow({
     required this.repo,
     required this.commit,
@@ -373,10 +383,35 @@ class _CommitRow extends ConsumerWidget {
     required this.isHead,
     required this.selected,
     required this.currentBranch,
+    this.compareRole,
   });
+
+  /// Ctrl/Cmd+clic con otro commit seleccionado → comparar los dos.
+  void _tap(WidgetRef ref) {
+    final notifier = ref.read(repoNotifierProvider(repo).notifier);
+    final state = ref.read(repoNotifierProvider(repo));
+    final keys = HardwareKeyboard.instance;
+    final other = state.selectedSha;
+    if ((keys.isControlPressed || keys.isMetaPressed) && other != null && other != commit.sha) {
+      _compareWith(ref, other);
+    } else {
+      notifier.selectCommit(commit.sha);
+    }
+  }
+
+  /// Compara este commit con [other]; el más antiguo hace de base.
+  void _compareWith(WidgetRef ref, String other) {
+    final state = ref.read(repoNotifierProvider(repo));
+    final mine = state.commits.indexWhere((c) => c.sha == commit.sha);
+    final theirs = state.commits.indexWhere((c) => c.sha == other);
+    final (base, target) = theirs > mine ? (other, commit.sha) : (commit.sha, other);
+    ref.read(repoNotifierProvider(repo).notifier).compareRevisions(base, target);
+  }
 
   Future<void> _menu(BuildContext context, WidgetRef ref, Offset position) async {
     final error = Theme.of(context).colorScheme.error;
+    final state = ref.read(repoNotifierProvider(repo));
+    final selectedOther = state.selectedSha != null && state.selectedSha != commit.sha ? state.selectedSha : null;
     final value = await showContextMenu<String>(context, position, [
       menuItem('checkout', Icons.call_split, 'Checkout this commit (detached)'),
       menuItem('branch', Icons.add, 'Create branch here…'),
@@ -393,6 +428,10 @@ class _CommitRow extends ConsumerWidget {
       menuItem('soft', Icons.restore, 'Reset current branch here — soft'),
       menuItem('mixed', Icons.restore, 'Reset current branch here — mixed'),
       menuItem('hard', Icons.warning_amber, 'Reset current branch here — hard', color: error),
+      const PopupMenuDivider(),
+      if (selectedOther != null)
+        menuItem('compare', Icons.compare_arrows, 'Compare with selected commit (${selectedOther.substring(0, 7)})'),
+      if (!isHead) menuItem('comparehead', Icons.compare_arrows, 'Compare with HEAD'),
       const PopupMenuDivider(),
       menuItem('copy', Icons.copy, 'Copy commit SHA'),
       menuItem('copymsg', Icons.short_text, 'Copy commit message'),
@@ -448,6 +487,11 @@ class _CommitRow extends ConsumerWidget {
               destructive: true,
             );
         if (ok && context.mounted) await runGitAction(context, ref, repo, ResetAction(sha, mode));
+      case 'compare':
+        _compareWith(ref, selectedOther!);
+      case 'comparehead':
+        await ref.read(repoNotifierProvider(repo).notifier).compareRevisions(sha, state.snapshot!.headSha!,
+            targetLabel: 'HEAD (${state.snapshot!.headSha!.substring(0, 7)})');
       case 'copy':
         await Clipboard.setData(ClipboardData(text: sha));
         if (context.mounted) showToast(context, 'Copied ${commit.shortSha}');
@@ -464,9 +508,15 @@ class _CommitRow extends ConsumerWidget {
     final color = laneColor(row.color);
 
     return Material(
-      color: selected ? theme.colorScheme.primary.withValues(alpha: 0.16) : Colors.transparent,
+      color: compareRole == 'BASE'
+          ? const Color(0xFFF85149).withValues(alpha: 0.14)
+          : compareRole == 'TARGET'
+              ? const Color(0xFF3FB950).withValues(alpha: 0.14)
+              : selected
+                  ? theme.colorScheme.primary.withValues(alpha: 0.16)
+                  : Colors.transparent,
       child: InkWell(
-        onTap: () => ref.read(repoNotifierProvider(repo).notifier).selectCommit(commit.sha),
+        onTap: () => _tap(ref),
         onSecondaryTapDown: (d) => _menu(context, ref, d.globalPosition),
         child: Row(
           children: [

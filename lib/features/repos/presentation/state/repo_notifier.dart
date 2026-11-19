@@ -6,6 +6,7 @@ import '../../../../core/error/result.dart';
 import '../../domain/entities/file_change.dart';
 import '../../domain/entities/file_diff.dart';
 import '../../domain/entities/pull_request.dart';
+import '../../domain/entities/repo_extras.dart';
 import '../../domain/entities/git_action.dart';
 import '../../domain/entities/git_commit.dart';
 import '../../domain/entities/repo_snapshot.dart';
@@ -13,6 +14,34 @@ import '../../domain/graph/commit_graph.dart';
 import '../../domain/repositories/git_repository.dart';
 
 const _unset = Object();
+
+/// Dos revisiones (SHA o nombre de rama) a comparar y sus ficheros.
+class CompareSelection {
+  final String base;
+  final String target;
+  final String baseLabel;
+  final String targetLabel;
+  final List<FileChange>? changes;
+  final AppFailure? error;
+
+  const CompareSelection({
+    required this.base,
+    required this.target,
+    required this.baseLabel,
+    required this.targetLabel,
+    this.changes,
+    this.error,
+  });
+
+  CompareSelection withResult({List<FileChange>? changes, AppFailure? error}) => CompareSelection(
+        base: base,
+        target: target,
+        baseLabel: baseLabel,
+        targetLabel: targetLabel,
+        changes: changes,
+        error: error,
+      );
+}
 
 class RepoState {
   final RepoSnapshot? snapshot;
@@ -37,6 +66,17 @@ class RepoState {
   final bool diffLoading;
   final AppFailure? diffError;
 
+  /// Qué haría "Undo" ahora, y lo deshecho que se puede rehacer.
+  final UndoPlan? undoPlan;
+  final List<({String label, GitAction action})> redoStack;
+
+  /// Vista de historial / blame de un fichero (ocupan el panel central).
+  final String? historyPath;
+  final ({String path, String? revision})? blame;
+
+  /// Comparación entre dos commits/ramas cualesquiera.
+  final CompareSelection? compare;
+
   const RepoState({
     this.snapshot,
     this.commits = const [],
@@ -53,6 +93,11 @@ class RepoState {
     this.fileContent,
     this.diffLoading = false,
     this.diffError,
+    this.undoPlan,
+    this.redoStack = const [],
+    this.historyPath,
+    this.blame,
+    this.compare,
   });
 
   bool get isBusy => busyLabel != null;
@@ -76,6 +121,11 @@ class RepoState {
     Object? fileContent = _unset,
     bool? diffLoading,
     Object? diffError = _unset,
+    Object? undoPlan = _unset,
+    List<({String label, GitAction action})>? redoStack,
+    Object? historyPath = _unset,
+    Object? blame = _unset,
+    Object? compare = _unset,
   }) {
     T pick<T>(Object? value, T current) => identical(value, _unset) ? current : value as T;
     return RepoState(
@@ -94,6 +144,11 @@ class RepoState {
       fileContent: pick(fileContent, this.fileContent),
       diffLoading: diffLoading ?? this.diffLoading,
       diffError: pick(diffError, this.diffError),
+      undoPlan: pick(undoPlan, this.undoPlan),
+      redoStack: redoStack ?? this.redoStack,
+      historyPath: pick(historyPath, this.historyPath),
+      blame: pick(blame, this.blame),
+      compare: pick(compare, this.compare),
     );
   }
 }
@@ -155,6 +210,12 @@ class RepoNotifier extends Notifier<RepoState> {
           }
         }
       }
+      final undo = await _git.loadUndoPlan(repo);
+      if (!ref.mounted) return;
+      next = next.copyWith(undoPlan: switch (undo) {
+        Success(:final value) => value,
+        Failure() => null,
+      });
       state = next;
 
       // Si el diff abierto es de cambios locales, puede haber cambiado... o
@@ -251,9 +312,80 @@ class RepoNotifier extends Notifier<RepoState> {
   }
 
   /// Ejecuta una acción git. Devuelve el fallo, o null si fue bien.
-  Future<AppFailure?> run(GitAction action) async {
+  /// Deshace la última operación (según el reflog) y la deja para "Redo".
+  Future<AppFailure?> undo() async {
+    final plan = state.undoPlan;
+    if (plan == null || state.isBusy) return null;
+    final failure = await run(plan.undo, keepRedo: true);
+    if (failure == null && ref.mounted) {
+      state = state.copyWith(redoStack: [...state.redoStack, (label: plan.redoLabel, action: plan.redo)]);
+    }
+    return failure;
+  }
+
+  Future<AppFailure?> redo() async {
+    if (state.redoStack.isEmpty || state.isBusy) return null;
+    final item = state.redoStack.last;
+    final failure = await run(item.action, keepRedo: true);
+    if (failure == null && ref.mounted) {
+      state = state.copyWith(redoStack: state.redoStack.sublist(0, state.redoStack.length - 1));
+    }
+    return failure;
+  }
+
+  void openHistory(String path) {
+    closeFile();
+    state = state.copyWith(historyPath: path, blame: null);
+  }
+
+  void openBlame(String path, {String? revision}) {
+    closeFile();
+    state = state.copyWith(blame: (path: path, revision: revision), historyPath: null);
+  }
+
+  void closeHistoryAndBlame() {
+    closeFile();
+    state = state.copyWith(historyPath: null, blame: null);
+  }
+
+  /// Esc: cierra lo que esté más "encima" en el panel central.
+  void closeTopmost() {
+    if (state.openFile != null) {
+      closeFile();
+    } else if (state.historyPath != null || state.blame != null) {
+      closeHistoryAndBlame();
+    } else if (state.compare != null) {
+      closeCompare();
+    }
+  }
+
+  Future<void> compareRevisions(String base, String target, {String? baseLabel, String? targetLabel}) async {
+    closeFile();
+    final selection = CompareSelection(
+      base: base,
+      target: target,
+      baseLabel: baseLabel ?? _short(base),
+      targetLabel: targetLabel ?? _short(target),
+    );
+    state = state.copyWith(compare: selection, historyPath: null, blame: null);
+    final result = await _git.loadComparison(repo, base, target);
+    if (!ref.mounted || state.compare != selection) return;
+    state = state.copyWith(compare: switch (result) {
+      Success(:final value) => selection.withResult(changes: value),
+      Failure(:final failure) => selection.withResult(error: failure),
+    });
+  }
+
+  void closeCompare() {
+    if (state.openFile?.source == DiffSource.commit && state.compare != null) closeFile();
+    state = state.copyWith(compare: null);
+  }
+
+  static String _short(String rev) => RegExp(r'^[0-9a-f]{40}$').hasMatch(rev) ? rev.substring(0, 7) : rev;
+
+  Future<AppFailure?> run(GitAction action, {bool keepRedo = false}) async {
     if (state.isBusy) return null;
-    state = state.copyWith(busyLabel: action.label);
+    state = state.copyWith(busyLabel: action.label, redoStack: keepRedo ? null : const []);
     final result = await _git.run(repo, action);
     if (!ref.mounted) return null;
     state = state.copyWith(busyLabel: null);
@@ -289,3 +421,21 @@ class PullRequestsException implements Exception {
   @override
   String toString() => message;
 }
+
+/// Configuración de firma (GPG/SSH) del repo; `ref.invalidate` al cambiarla.
+final signingConfigProvider = FutureProvider.family<SigningConfig, RepoHandle>((ref, repo) async {
+  final result = await ref.read(gitRepositoryProvider).loadSigningConfig(repo);
+  return switch (result) {
+    Success(:final value) => value,
+    Failure() => const SigningConfig(),
+  };
+});
+
+/// Plantilla de mensaje (`commit.template`), si hay.
+final commitTemplateProvider = FutureProvider.family<String?, RepoHandle>((ref, repo) async {
+  final result = await ref.read(gitRepositoryProvider).loadCommitTemplate(repo);
+  return switch (result) {
+    Success(:final value) => value,
+    Failure() => null,
+  };
+});

@@ -79,6 +79,10 @@ class RepoSnapshot {
   final PendingOperation pendingOperation;
   final RebaseProgress? rebase;
 
+  /// Ramas abiertas en OTRO worktree (otra carpeta): rama → carpeta.
+  /// Git no deja hacer checkout de ellas aquí.
+  final Map<String, String> worktreeBranches;
+
   const RepoSnapshot({
     required this.path,
     required this.currentBranch,
@@ -90,6 +94,7 @@ class RepoSnapshot {
     required this.unstaged,
     this.pendingOperation = PendingOperation.none,
     this.rebase,
+    this.worktreeBranches = const {},
   });
 
   bool get isDetached => currentBranch == null && headSha != null;

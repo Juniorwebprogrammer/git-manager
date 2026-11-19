@@ -221,7 +221,7 @@ class _Header extends ConsumerWidget {
                     text: switch (target.source) {
                       DiffSource.unstaged => 'Unstaged changes',
                       DiffSource.staged => 'Staged changes',
-                      DiffSource.commit => 'Commit ${target.commitSha!.substring(0, 7)}',
+                      DiffSource.commit => target.title ?? 'Commit ${shortRev(target.commitSha!)}',
                     },
                     style: faded,
                   ),
@@ -251,6 +251,31 @@ class _Header extends ConsumerWidget {
               onPressed: () =>
                   stageOrUnstage(target.source == DiffSource.staged ? UnstageAction(paths) : StageAction(paths)),
             ),
+          _FileButton(
+            tooltip: 'File history',
+            icon: Icons.history,
+            onPressed: () => notifier.openHistory(target.path),
+          ),
+          if (!target.deleted)
+            _FileButton(
+              tooltip: target.source == DiffSource.commit ? 'Blame at this version' : 'Blame',
+              icon: Icons.person_search_outlined,
+              onPressed: () => notifier.openBlame(
+                target.path,
+                revision: target.source == DiffSource.commit ? target.commitSha : null,
+              ),
+            ),
+          _FileButton(
+            tooltip: 'Open in editor',
+            icon: Icons.code,
+            onPressed: () => openFileInEditor(
+              context,
+              ref,
+              repo,
+              target.path,
+              line: diff == null || diff!.hunks.isEmpty ? null : diff!.hunks.first.newStart,
+            ),
+          ),
           const SizedBox(width: 6),
           SegmentedButton<_ViewMode>(
             showSelectedIcon: false,
@@ -283,7 +308,12 @@ class _Header extends ConsumerWidget {
                       ],
                     ),
                     const SizedBox(height: 4),
-                    Row(mainAxisAlignment: MainAxisAlignment.end, children: actions),
+                    // Si aun así no caben, bajan a otra línea en vez de desbordar.
+                    Wrap(
+                      alignment: WrapAlignment.end,
+                      crossAxisAlignment: WrapCrossAlignment.center,
+                      children: actions,
+                    ),
                   ],
                 )
               : Row(
@@ -298,6 +328,24 @@ class _Header extends ConsumerWidget {
       },
     );
   }
+}
+
+class _FileButton extends StatelessWidget {
+  final String tooltip;
+  final IconData icon;
+  final VoidCallback onPressed;
+
+  const _FileButton({required this.tooltip, required this.icon, required this.onPressed});
+
+  @override
+  Widget build(BuildContext context) => IconButton(
+        tooltip: tooltip,
+        onPressed: onPressed,
+        icon: Icon(icon, size: 18),
+        visualDensity: VisualDensity.compact,
+        padding: EdgeInsets.zero,
+        constraints: const BoxConstraints(minWidth: 30, minHeight: 30),
+      );
 }
 
 class _HeaderAction extends StatelessWidget {

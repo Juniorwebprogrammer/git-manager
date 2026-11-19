@@ -1,6 +1,7 @@
 import '../../domain/entities/file_change.dart';
 import '../../domain/entities/file_diff.dart';
 import '../../domain/entities/git_commit.dart';
+import '../../domain/entities/repo_extras.dart';
 import '../../domain/entities/repo_snapshot.dart';
 
 /// Formato de `git log` que entiende [parseLog]. Requiere `--decorate=full`.
@@ -11,7 +12,8 @@ const refFormat =
     '%(HEAD)%1f%(refname)%1f%(objectname)%1f%(*objectname)%1f%(upstream:short)%1f%(upstream:track,nobracket)';
 
 /// Formato de `git show -s` que entiende [parseCommitHeader].
-const commitDetailFormat = '%H%x1f%P%x1f%an%x1f%ae%x1f%at%x1f%cn%x1f%ct%x1f%B';
+/// %G? / %GS: estado de la firma y firmante.
+const commitDetailFormat = '%H%x1f%P%x1f%an%x1f%ae%x1f%at%x1f%cn%x1f%ct%x1f%G?%x1f%GS%x1f%B';
 
 DateTime _epoch(String seconds) =>
     DateTime.fromMillisecondsSinceEpoch((int.tryParse(seconds) ?? 0) * 1000);
@@ -202,9 +204,123 @@ GitCommitDetail parseCommitHeader(String output, List<FileChange> changes) {
     authorDate: _epoch(f[4]),
     committerName: f[5],
     commitDate: _epoch(f[6]),
-    message: f.sublist(7).join('\x1f').trim(),
+    signature: signatureFromCode(f[7]),
+    signer: f[8].trim(),
+    message: f.sublist(9).join('\x1f').trim(),
     changes: changes,
   );
+}
+
+/// `git worktree list --porcelain` → ramas abiertas en otras carpetas
+/// (rama → carpeta), sin contar [currentPath].
+Map<String, String> parseWorktrees(String output, String currentPath) {
+  final result = <String, String>{};
+  String? path;
+  String? branch;
+  void flush() {
+    if (path != null && branch != null && !_samePath(path!, currentPath)) result[branch!] = path!;
+    path = null;
+    branch = null;
+  }
+
+  for (final line in output.split('\n')) {
+    if (line.startsWith('worktree ')) {
+      flush();
+      path = line.substring(9).trim();
+    } else if (line.startsWith('branch ')) {
+      branch = line.substring(7).trim().replaceFirst('refs/heads/', '');
+    } else if (line.trim().isEmpty) {
+      flush();
+    }
+  }
+  flush();
+  return result;
+}
+
+bool _samePath(String a, String b) {
+  String norm(String s) => s.replaceAll('\\', '/').replaceAll(RegExp(r'/+$'), '').toLowerCase();
+  return norm(a) == norm(b);
+}
+
+final _blameHeader = RegExp(r'^([0-9a-f]{40}) (\d+) (\d+)(?: (\d+))?$');
+
+/// `git blame --porcelain`.
+List<BlameLine> parseBlamePorcelain(String output) {
+  final info = <String, ({String author, DateTime date, String summary})>{};
+  final result = <BlameLine>[];
+  String? sha;
+  var finalLine = 0;
+  var author = '';
+  var time = '0';
+  var summary = '';
+
+  for (final line in output.split('\n')) {
+    final header = _blameHeader.firstMatch(line);
+    if (header != null) {
+      sha = header.group(1);
+      finalLine = int.parse(header.group(3)!);
+      final known = info[sha];
+      author = known?.author ?? '';
+      summary = known?.summary ?? '';
+      time = '';
+      continue;
+    }
+    if (sha == null) continue;
+    if (line.startsWith('\t')) {
+      final known = info[sha] ??
+          (info[sha] = (author: author, date: _epoch(time.isEmpty ? '0' : time), summary: summary));
+      result.add(BlameLine(
+        number: finalLine,
+        text: line.substring(1),
+        sha: sha,
+        author: known.author,
+        date: known.date,
+        summary: known.summary,
+      ));
+    } else if (line.startsWith('author ')) {
+      author = line.substring(7);
+    } else if (line.startsWith('author-time ')) {
+      time = line.substring(12).trim();
+    } else if (line.startsWith('summary ')) {
+      summary = line.substring(8);
+    }
+  }
+  return result;
+}
+
+/// Formato de `git log` para [parseFileHistory].
+const fileHistoryFormat = '%x1e%H%x1f%P%x1f%an%x1f%ae%x1f%at%x1f%s';
+
+/// `git log --follow --name-status --format=<fileHistoryFormat> -- path`.
+List<FileHistoryEntry> parseFileHistory(String output) {
+  final entries = <FileHistoryEntry>[];
+  for (final record in output.split('\x1e')) {
+    if (record.trim().isEmpty) continue;
+    final lines = record.split('\n');
+    final f = lines.first.split('\x1f');
+    if (f.length < 6) continue;
+    final commit = GitCommit(
+      sha: f[0],
+      parents: f[1].isEmpty ? const [] : f[1].split(' '),
+      authorName: f[2],
+      authorEmail: f[3],
+      date: _epoch(f[4]),
+      refs: const [],
+      subject: f.sublist(5).join('\x1f'),
+    );
+    var path = '';
+    var change = ChangeType.modified;
+    for (final l in lines.skip(1)) {
+      if (l.trim().isEmpty) continue;
+      final parts = l.split('\t');
+      if (parts.length < 2) continue;
+      change = changeTypeFromLetter(parts.first.substring(0, 1));
+      path = parts.last;
+      break;
+    }
+    entries.add(FileHistoryEntry(commit: commit, path: path, change: change));
+  }
+  return entries;
 }
 
 final _hunkHeader = RegExp(r'^@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@(.*)$');

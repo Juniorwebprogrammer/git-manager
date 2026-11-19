@@ -1,10 +1,14 @@
+import 'dart:io';
+
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:path/path.dart' as p;
 
 import '../../../../core/error/app_failure.dart';
 import '../../domain/entities/file_change.dart';
 import '../../domain/entities/git_action.dart';
+import '../../../../core/di/providers.dart';
 import '../../domain/repositories/git_repository.dart';
 import '../state/repo_notifier.dart';
 
@@ -312,4 +316,49 @@ Future<void> squashMergeInto(BuildContext context, WidgetRef ref, RepoHandle rep
   );
   if (message == null || !context.mounted) return;
   await runGitAction(context, ref, repo, SquashMergeAction(source, message), successMessage: 'Squashed $source into $into');
+}
+
+/// SHA corto (7) o el nombre tal cual (ramas, tags).
+String shortRev(String rev) => RegExp(r'^[0-9a-f]{40}$').hasMatch(rev) ? rev.substring(0, 7) : rev;
+
+/// Abre [path] (relativo al repo) en VS Code / el editor del sistema.
+Future<void> openFileInEditor(BuildContext context, WidgetRef ref, RepoHandle repo, String path, {int? line}) async {
+  final file = p.join(repo.path, path);
+  if (!File(file).existsSync()) {
+    showToast(context, '"$path" does not exist in the working tree.');
+    return;
+  }
+  final used = await ref.read(systemLauncherProvider).openInEditor(file, line: line);
+  if (context.mounted) showToast(context, 'Opened $path in $used');
+}
+
+/// Menú de un fichero: editor, historial, blame, copiar ruta.
+Future<void> showFileMenu(
+  BuildContext context,
+  WidgetRef ref,
+  RepoHandle repo,
+  String path,
+  Offset position, {
+  String? revision,
+}) async {
+  final value = await showContextMenu<String>(context, position, [
+    menuItem('editor', Icons.code, 'Open in editor'),
+    menuItem('history', Icons.history, 'File history'),
+    menuItem('blame', Icons.person_search_outlined, revision == null ? 'Blame' : 'Blame at ${shortRev(revision)}'),
+    const PopupMenuDivider(),
+    menuItem('copy', Icons.copy, 'Copy path'),
+  ]);
+  if (value == null || !context.mounted) return;
+  final notifier = ref.read(repoNotifierProvider(repo).notifier);
+  switch (value) {
+    case 'editor':
+      await openFileInEditor(context, ref, repo, path);
+    case 'history':
+      notifier.openHistory(path);
+    case 'blame':
+      notifier.openBlame(path, revision: revision);
+    case 'copy':
+      await Clipboard.setData(ClipboardData(text: path));
+      if (context.mounted) showToast(context, 'Path copied');
+  }
 }

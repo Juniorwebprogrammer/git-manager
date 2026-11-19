@@ -3,6 +3,8 @@ import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:http/http.dart' as http;
 
 import '../git/git_runner.dart';
+import '../system/signing_keys.dart';
+import '../system/system_launcher.dart';
 
 import '../../features/accounts/data/datasources/account_local_data_source.dart';
 import '../../features/accounts/data/datasources/git_config_data_source.dart';
@@ -94,3 +96,7 @@ final gitRepositoryProvider = Provider<GitRepository>((ref) {
 final workspaceRepositoryProvider = Provider<WorkspaceRepository>((ref) {
   return WorkspaceRepositoryImpl(WorkspaceLocalDataSource(ref.watch(secureStorageProvider)));
 });
+
+final systemLauncherProvider = Provider<SystemLauncher>((ref) => SystemLauncher());
+
+final signingKeysProvider = Provider<SigningKeys>((ref) => SigningKeys(ref.watch(gitRunnerProvider)));

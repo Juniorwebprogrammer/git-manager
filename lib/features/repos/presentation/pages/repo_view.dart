@@ -6,9 +6,12 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../domain/repositories/git_repository.dart';
 import '../state/repo_notifier.dart';
+import '../widgets/blame_view.dart';
 import '../widgets/commit_detail_panel.dart';
 import '../widgets/commit_graph_view.dart';
+import '../widgets/compare_panel.dart';
 import '../widgets/diff_viewer.dart';
+import '../widgets/file_history_view.dart';
 import '../widgets/ref_sidebar.dart';
 import '../widgets/repo_toolbar.dart';
 import '../widgets/staging_panel.dart';
@@ -33,6 +36,7 @@ class RepoView extends ConsumerStatefulWidget {
 class _RepoViewState extends ConsumerState<RepoView> {
   static const _pollInterval = Duration(seconds: 5);
   Timer? _timer;
+  final _focus = FocusNode(debugLabel: 'repo-view');
   double _sidebarWidth = 240;
   double _panelWidth = 380;
   bool _sidebarVisible = true;
@@ -40,6 +44,7 @@ class _RepoViewState extends ConsumerState<RepoView> {
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addPostFrameCallback((_) => _reclaimFocus());
     _syncTimer();
   }
 
@@ -47,6 +52,7 @@ class _RepoViewState extends ConsumerState<RepoView> {
   void didUpdateWidget(RepoView old) {
     super.didUpdateWidget(old);
     if (widget.active && !old.active) {
+      WidgetsBinding.instance.addPostFrameCallback((_) => _reclaimFocus());
       ref.read(repoNotifierProvider(widget.repo).notifier).refresh();
     }
     _syncTimer();
@@ -64,8 +70,20 @@ class _RepoViewState extends ConsumerState<RepoView> {
     }
   }
 
+  /// Los atajos de la pestaña solo llegan si el foco está dentro de ella.
+  /// Se recupera cuando se ha quedado "por encima" (la pantalla de
+  /// workspace, un ámbito vacío), nunca quitándoselo a un diálogo o campo.
+  void _reclaimFocus() {
+    if (!mounted || !widget.active) return;
+    final primary = FocusManager.instance.primaryFocus;
+    if (primary == null || primary is FocusScopeNode || _focus.ancestors.contains(primary)) {
+      _focus.requestFocus();
+    }
+  }
+
   @override
   void dispose() {
+    _focus.dispose();
     _timer?.cancel();
     super.dispose();
   }
@@ -75,6 +93,19 @@ class _RepoViewState extends ConsumerState<RepoView> {
     final provider = repoNotifierProvider(widget.repo);
     final hasOpenFile = ref.watch(provider.select((s) => s.openFile != null));
     final wipSelected = ref.watch(provider.select((s) => s.selectedSha == null));
+    final historyPath = ref.watch(provider.select((s) => s.historyPath));
+    final blame = ref.watch(provider.select((s) => s.blame));
+    final comparing = ref.watch(provider.select((s) => s.compare != null));
+
+    // Al cerrar un diff/historial, el widget con el foco desaparece y el
+    // foco queda en el ámbito superior, fuera de los atajos (Esc, F5) de
+    // esta pestaña. Se lo devolvemos.
+    ref.listen(provider.select((s) => (s.openFile, s.historyPath, s.blame, s.compare)), (_, _) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!mounted || !widget.active) return;
+        _reclaimFocus();
+      });
+    });
     final loadError = ref.watch(provider.select((s) => s.snapshot == null ? s.loadError : null));
 
     if (loadError != null) {
@@ -97,10 +128,11 @@ class _RepoViewState extends ConsumerState<RepoView> {
 
     return CallbackShortcuts(
       bindings: {
-        const SingleActivator(LogicalKeyboardKey.escape): () => ref.read(provider.notifier).closeFile(),
+        const SingleActivator(LogicalKeyboardKey.escape): () => ref.read(provider.notifier).closeTopmost(),
         const SingleActivator(LogicalKeyboardKey.f5): () => ref.read(provider.notifier).refresh(forceHistory: true),
       },
       child: Focus(
+        focusNode: _focus,
         autofocus: widget.active,
         child: Column(
           children: [
@@ -125,12 +157,22 @@ class _RepoViewState extends ConsumerState<RepoView> {
                         _DragHandle(onDrag: (dx) => setState(() => _sidebarWidth = sidebar + dx)),
                       ],
                       Expanded(
-                        child: hasOpenFile ? DiffViewer(repo: widget.repo) : CommitGraphView(repo: widget.repo),
+                        child: blame != null
+                            ? BlameView(repo: widget.repo, path: blame.path, revision: blame.revision)
+                            : historyPath != null
+                                ? FileHistoryView(repo: widget.repo, path: historyPath)
+                                : hasOpenFile
+                                    ? DiffViewer(repo: widget.repo)
+                                    : CommitGraphView(repo: widget.repo),
                       ),
                       _DragHandle(onDrag: (dx) => setState(() => _panelWidth = panel - dx)),
                       SizedBox(
                         width: panel,
-                        child: wipSelected ? StagingPanel(repo: widget.repo) : CommitDetailPanel(repo: widget.repo),
+                        child: comparing
+                            ? ComparePanel(repo: widget.repo)
+                            : wipSelected
+                                ? StagingPanel(repo: widget.repo)
+                                : CommitDetailPanel(repo: widget.repo),
                       ),
                     ],
                   );

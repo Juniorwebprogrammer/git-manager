@@ -174,6 +174,10 @@ class GitHubRemoteDataSource {
     }
     if (response.statusCode >= 200 && response.statusCode < 300) return response;
     if (response.statusCode == 401) throw const InvalidTokenException();
+    if (response.statusCode == 403 || response.statusCode == 404) {
+      final permission = permissionProblem(response, token: token, path: path);
+      if (permission != null) throw ServerException(permission);
+    }
     throw ServerException(_githubError(response));
   }
 
@@ -210,6 +214,10 @@ class GitHubRemoteDataSource {
     }
 
     if (response.statusCode == 200) return response;
+    if (response.statusCode == 403 || response.statusCode == 404) {
+      final permission = permissionProblem(response, token: token, path: path);
+      if (permission != null) throw ServerException(permission);
+    }
     if (response.statusCode == 401 || response.statusCode == 403) {
       throw const InvalidTokenException();
     }
@@ -226,4 +234,60 @@ CiStatus combineCiStates(List<String> states) {
     return CiStatus.pending;
   }
   return CiStatus.success;
+}
+
+/// Explica un 403/404 de GitHub por falta de permisos del token, usando las
+/// cabeceras que GitHub devuelve (`X-Accepted-GitHub-Permissions` para
+/// tokens fine-grained, `X-OAuth-Scopes` para los clásicos). null si el
+/// error no es de permisos.
+String? permissionProblem(http.Response response, {required String token, required String path}) {
+  String message;
+  try {
+    message = (jsonDecode(response.body) as Map<String, dynamic>)['message'] as String? ?? '';
+  } catch (_) {
+    message = '';
+  }
+  final notAccessible = message.contains('Resource not accessible');
+  // GitHub responde 404 (no 403) cuando el token no puede ver el repo.
+  final hidden = response.statusCode == 404 && path.startsWith('/repos/');
+  if (!notAccessible && !hidden) return null;
+
+  final repo = RegExp(r'^/repos/([^/]+/[^/?]+)').firstMatch(path)?.group(1) ?? 'this repository';
+  final accepted = response.headers['x-accepted-github-permissions'];
+  final scopes = response.headers['x-oauth-scopes'];
+  final fineGrained = token.startsWith('github_pat_');
+  final classic = token.startsWith('ghp_');
+
+  final lines = <String>[
+    hidden
+        ? 'GitHub says $repo does not exist for this token — usually the token simply cannot see it.'
+        : 'GitHub refused: the token of this account is not allowed to do this in $repo.',
+    '',
+  ];
+  if (fineGrained || (!classic && accepted != null)) {
+    lines.addAll([
+      'It is a fine-grained token. On github.com → Settings → Developer settings → '
+          'Fine-grained tokens → (your token) → Edit:',
+      '  • Repository access: include $repo (or "All repositories").',
+      '  • Repository permissions: Pull requests → Read and write, Contents → Read and write'
+          '${accepted != null && accepted.isNotEmpty ? '\n    (GitHub says this action needs: ${accepted.replaceAll(';', ', ')})' : ''}.',
+      '  • If $repo belongs to an organization, it must allow fine-grained tokens, '
+          'and the token\'s "Resource owner" must be that organization.',
+      '  • A fine-grained token cannot access repositories of another user where you are only a collaborator — '
+          'use a classic token for those.',
+    ]);
+  } else {
+    lines.addAll([
+      'It is a classic token. On github.com → Settings → Developer settings → Tokens (classic) → '
+          '(your token) → enable the "repo" scope (or "public_repo" for public repositories).',
+      if (scopes != null) '  • Scopes the token has now: ${scopes.isEmpty ? '(none)' : scopes}.',
+      '  • If $repo belongs to an organization with SSO, click "Configure SSO" → Authorize next to the token.',
+    ]);
+  }
+  lines.addAll([
+    '',
+    'Editing the permissions keeps the same token, so you do not need to add the account again.',
+    'GitHub said: ${message.isEmpty ? 'HTTP ${response.statusCode}' : message}',
+  ]);
+  return lines.join('\n');
 }

@@ -162,4 +162,59 @@ void main() {
       );
     });
   });
+
+  group('GitHub permission errors', () {
+    test('fine-grained token: says which permission is missing and how to add it', () async {
+      final client = MockClient((req) async => http.Response(
+            jsonEncode({'message': 'Resource not accessible by personal access token'}),
+            403,
+            headers: {'x-accepted-github-permissions': 'pull_requests=write'},
+          ));
+      final api = GitHubRemoteDataSource(client);
+      await expectLater(
+        api.createPullRequest('github_pat_abc', 'octo', 'demo', title: 'T', head: 'f', base: 'main'),
+        throwsA(isA<ServerException>().having(
+          (e) => e.message,
+          'message',
+          allOf(
+            contains('fine-grained token'),
+            contains('Pull requests → Read and write'),
+            contains('pull_requests=write'),
+            contains('octo/demo'),
+            contains('Resource not accessible by personal access token'),
+          ),
+        )),
+      );
+    });
+
+    test('classic token: shows its scopes and asks for "repo"', () async {
+      final client = MockClient((req) async => http.Response(
+            jsonEncode({'message': 'Resource not accessible by personal access token'}),
+            403,
+            headers: {'x-oauth-scopes': 'read:user, user:email'},
+          ));
+      final api = GitHubRemoteDataSource(client);
+      await expectLater(
+        api.fetchOpenPullRequests('ghp_abc', 'octo', 'demo'),
+        throwsA(isA<ServerException>().having(
+          (e) => e.message,
+          'message',
+          allOf(contains('classic token'), contains('"repo" scope'), contains('read:user, user:email')),
+        )),
+      );
+    });
+
+    test('a 404 on a repository is explained as missing access', () async {
+      final api = GitHubRemoteDataSource(MockClient((req) async => http.Response('{"message":"Not Found"}', 404)));
+      await expectLater(
+        api.fetchRepoInfo('github_pat_abc', 'octo', 'private'),
+        throwsA(isA<ServerException>().having((e) => e.message, 'message', contains('cannot see it'))),
+      );
+    });
+
+    test('other 403s on /user still mean an invalid token', () async {
+      final api = GitHubRemoteDataSource(MockClient((req) async => http.Response('{"message":"Bad credentials"}', 403)));
+      await expectLater(api.fetchAuthenticatedUser('ghp_x'), throwsA(isA<InvalidTokenException>()));
+    });
+  });
 }

@@ -6,6 +6,7 @@ import 'package:url_launcher/url_launcher.dart';
 import '../../domain/entities/git_action.dart';
 import '../../domain/entities/repo_snapshot.dart';
 import '../../domain/repositories/git_repository.dart';
+import '../../../../core/di/providers.dart';
 import '../state/repo_notifier.dart';
 import 'pull_request_dialog.dart';
 import 'ui_helpers.dart';
@@ -23,6 +24,23 @@ class RepoToolbar extends ConsumerWidget {
     required this.sidebarVisible,
     required this.onToggleSidebar,
   });
+
+  Future<void> _undo(BuildContext context, WidgetRef ref) async {
+    final label = ref.read(repoNotifierProvider(repo)).undoPlan?.label;
+    final failure = await ref.read(repoNotifierProvider(repo).notifier).undo();
+    if (!context.mounted) return;
+    if (failure != null) {
+      await showGitError(context, failure);
+    } else if (label != null) {
+      showToast(context, label.replaceFirst('Undo', 'Undone:'));
+    }
+  }
+
+  Future<void> _redo(BuildContext context, WidgetRef ref) async {
+    final failure = await ref.read(repoNotifierProvider(repo).notifier).redo();
+    if (!context.mounted) return;
+    if (failure != null) await showGitError(context, failure);
+  }
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
@@ -55,7 +73,7 @@ class RepoToolbar extends ConsumerWidget {
 
     return LayoutBuilder(builder: (context, constraints) {
       final width = constraints.maxWidth;
-      final compact = width < 1060; // solo iconos
+      final compact = width < 1200; // solo iconos
       final showRepo = width >= 720;
 
       return Container(
@@ -85,6 +103,22 @@ class RepoToolbar extends ConsumerWidget {
                       ],
                     ),
                   ),
+                  _ToolButton(
+                    key: const ValueKey('toolbar-first'),
+                    icon: Icons.undo,
+                    label: 'Undo',
+                    tooltip: state.undoPlan?.label ?? 'Nothing to undo',
+                    compact: compact,
+                    onPressed: busy || state.undoPlan == null ? null : () => _undo(context, ref),
+                  ),
+                  _ToolButton(
+                    icon: Icons.redo,
+                    label: 'Redo',
+                    tooltip: state.redoStack.isEmpty ? 'Nothing to redo' : state.redoStack.last.label,
+                    compact: compact,
+                    onPressed: busy || state.redoStack.isEmpty ? null : () => _redo(context, ref),
+                  ),
+                  const _Separator(),
                   _ToolButton(
                     icon: Icons.cloud_download_outlined,
                     label: 'Pull',
@@ -167,6 +201,29 @@ class RepoToolbar extends ConsumerWidget {
                     tooltip: 'Open folder',
                     compact: compact,
                     onPressed: () => launchUrl(Uri.file(repo.path)),
+                  ),
+                  _ToolButton(
+                    icon: Icons.terminal,
+                    label: 'Terminal',
+                    tooltip: 'Open a terminal here',
+                    compact: compact,
+                    onPressed: () async {
+                      final ok = await ref.read(systemLauncherProvider).openTerminal(repo.path);
+                      if (!ok && context.mounted) showToast(context, 'No terminal emulator found');
+                    },
+                  ),
+                  _ToolButton(
+                    key: const ValueKey('toolbar-last'),
+                    icon: Icons.code,
+                    label: 'VS Code',
+                    tooltip: 'Open the repository in VS Code',
+                    compact: compact,
+                    onPressed: () async {
+                      final ok = await ref.read(systemLauncherProvider).openFolderInEditor(repo.path);
+                      if (!ok && context.mounted) {
+                        showToast(context, 'VS Code not found (install it and make sure "code" is on your PATH)');
+                      }
+                    },
                   ),
                   Expanded(
                     child: busy && !compact
@@ -331,6 +388,7 @@ class _ToolButton extends StatelessWidget {
   final VoidCallback? onPressed;
 
   const _ToolButton({
+    super.key,
     required this.icon,
     required this.label,
     required this.onPressed,

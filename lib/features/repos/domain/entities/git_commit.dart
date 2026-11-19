@@ -36,6 +36,26 @@ class GitCommit {
   bool get isMerge => parents.length > 1;
 }
 
+enum SignatureStatus {
+  none,
+  good,
+
+  /// Firma válida pero de una clave sin confianza / desconocida.
+  unknownValidity,
+  bad,
+
+  /// Firmado, pero no se puede verificar en este equipo.
+  cannotVerify,
+}
+
+SignatureStatus signatureFromCode(String code) => switch (code.trim()) {
+      'G' => SignatureStatus.good,
+      'U' => SignatureStatus.unknownValidity,
+      'B' => SignatureStatus.bad,
+      'X' || 'Y' || 'R' || 'E' => SignatureStatus.cannotVerify,
+      _ => SignatureStatus.none,
+    };
+
 class GitCommitDetail {
   final String sha;
   final List<String> parents;
@@ -46,6 +66,8 @@ class GitCommitDetail {
   final DateTime commitDate;
   final String message;
   final List<FileChange> changes;
+  final SignatureStatus signature;
+  final String signer;
 
   const GitCommitDetail({
     required this.sha,
@@ -57,6 +79,8 @@ class GitCommitDetail {
     required this.commitDate,
     required this.message,
     required this.changes,
+    this.signature = SignatureStatus.none,
+    this.signer = '',
   });
 
   String get subject => message.split('\n').first;

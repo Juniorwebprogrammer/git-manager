@@ -2,7 +2,9 @@ import '../../../../core/error/result.dart';
 import '../entities/file_diff.dart';
 import '../entities/git_action.dart';
 import '../entities/git_commit.dart';
+import '../entities/file_change.dart';
 import '../entities/pull_request.dart';
+import '../entities/repo_extras.dart';
 import '../entities/remote_repository.dart';
 import '../entities/repo_snapshot.dart';
 
@@ -30,6 +32,24 @@ abstract interface class GitRepository {
   /// Commits de `base..HEAD` (más antiguo primero, sin merges) para
   /// preparar un rebase interactivo.
   Future<Result<List<GitCommit>>> loadCommitsForRebase(RepoHandle repo, String base);
+
+  /// Qué deshacería "Undo" ahora (null si no hay nada que deshacer).
+  Future<Result<UndoPlan?>> loadUndoPlan(RepoHandle repo);
+
+  /// Commits que tocaron [path] (siguiendo renombrados), más reciente primero.
+  Future<Result<List<FileHistoryEntry>>> loadFileHistory(RepoHandle repo, String path);
+
+  /// Autor y commit de cada línea de [path]: del directorio de trabajo, o
+  /// de la versión en [revision] si se indica.
+  Future<Result<List<BlameLine>>> loadBlame(RepoHandle repo, String path, {String? revision});
+
+  /// Ficheros que cambian entre dos commits/ramas cualesquiera.
+  Future<Result<List<FileChange>>> loadComparison(RepoHandle repo, String base, String target);
+
+  Future<Result<SigningConfig>> loadSigningConfig(RepoHandle repo);
+
+  /// Texto de `commit.template` (sin comentarios), si hay uno configurado.
+  Future<Result<String?>> loadCommitTemplate(RepoHandle repo);
 
   /// Repo de GitHub al que apunta `origin` (falla si no es de github.com).
   Future<Result<GitHubRepoInfo>> githubRepoInfo(RepoHandle repo);

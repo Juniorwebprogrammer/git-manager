@@ -7,6 +7,7 @@ import '../../domain/entities/repo_extras.dart';
 import '../../domain/repositories/git_repository.dart';
 import '../state/repo_notifier.dart';
 import 'code_highlighter.dart';
+import 'code_view_style.dart';
 import 'ui_helpers.dart';
 
 const _lineHeight = 20.0;
@@ -81,44 +82,46 @@ class _BlameViewState extends ConsumerState<BlameView> {
       ),
     );
 
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.stretch,
-      children: [
-        header,
-        const Divider(height: 1),
-        Expanded(
-          child: FutureBuilder(
-            future: _future,
-            builder: (context, snap) {
-              final result = snap.data;
-              if (result == null) return const Center(child: CircularProgressIndicator());
-              if (result case Failure(:final failure)) {
-                return Center(
-                  child: Padding(
-                    padding: const EdgeInsets.all(24),
-                    child: Text(
-                      failure.message.contains('no such path')
-                          ? 'This file is not committed yet, so there is nothing to blame.'
-                          : failure.message,
-                      textAlign: TextAlign.center,
+    return CodeViewStyleScope(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          header,
+          const Divider(height: 1),
+          Expanded(
+            child: FutureBuilder(
+              future: _future,
+              builder: (context, snap) {
+                final result = snap.data;
+                if (result == null) return const Center(child: CircularProgressIndicator());
+                if (result case Failure(:final failure)) {
+                  return Center(
+                    child: Padding(
+                      padding: const EdgeInsets.all(24),
+                      child: Text(
+                        failure.message.contains('no such path')
+                            ? 'This file is not committed yet, so there is nothing to blame.'
+                            : failure.message,
+                        textAlign: TextAlign.center,
+                      ),
                     ),
+                  );
+                }
+                final lines = (result as Success<List<BlameLine>>).value;
+                return LayoutBuilder(
+                  builder: (context, c) => _BlameList(
+                    repo: widget.repo,
+                    lines: lines,
+                    annotationWidth: (c.maxWidth * 0.34).clamp(150.0, 300.0),
+                    highlighter: CodeHighlighter.forPath(widget.path, theme.brightness),
+                    onEdit: (line) => openFileInEditor(context, ref, widget.repo, widget.path, line: line),
                   ),
                 );
-              }
-              final lines = (result as Success<List<BlameLine>>).value;
-              return LayoutBuilder(
-                builder: (context, c) => _BlameList(
-                  repo: widget.repo,
-                  lines: lines,
-                  annotationWidth: (c.maxWidth * 0.34).clamp(150.0, 300.0),
-                  highlighter: CodeHighlighter.forPath(widget.path, theme.brightness),
-                  onEdit: (line) => openFileInEditor(context, ref, widget.repo, widget.path, line: line),
-                ),
-              );
-            },
+              },
+            ),
           ),
-        ),
-      ],
+        ],
+      ),
     );
   }
 }
@@ -147,8 +150,11 @@ class _BlameList extends ConsumerWidget {
     final dates = lines.where((l) => !l.isUncommitted).map((l) => l.date.millisecondsSinceEpoch).toList();
     final oldest = dates.isEmpty ? 0 : dates.reduce((a, b) => a < b ? a : b);
     final newest = dates.isEmpty ? 1 : dates.reduce((a, b) => a > b ? a : b);
-    double age(BlameLine l) =>
-        l.isUncommitted ? 1 : newest == oldest ? 1 : (l.date.millisecondsSinceEpoch - oldest) / (newest - oldest);
+    double age(BlameLine l) => l.isUncommitted
+        ? 1
+        : newest == oldest
+        ? 1
+        : (l.date.millisecondsSinceEpoch - oldest) / (newest - oldest);
 
     // Índice de bloque (grupo de líneas seguidas del mismo commit) por
     // línea, para alternar el sombreado. Se calcula una vez.
@@ -157,13 +163,18 @@ class _BlameList extends ConsumerWidget {
       blocks[j] = blocks[j - 1] + (lines[j].sha != lines[j - 1].sha ? 1 : 0);
     }
 
-    final base = monoStyle(context, size: 12.5);
-    final gutter = monoStyle(context, size: 11.5, color: theme.colorScheme.onSurfaceVariant.withValues(alpha: 0.7));
+    final fontSize = CodeViewStyle.of(context).fontSize;
+    final base = monoStyle(context, size: fontSize);
+    final gutter = monoStyle(
+      context,
+      size: fontSize - 1,
+      color: theme.colorScheme.onSurfaceVariant.withValues(alpha: 0.7),
+    );
     final faded = theme.textTheme.labelSmall?.copyWith(color: theme.colorScheme.onSurfaceVariant);
 
     return SelectionArea(
       child: ListView.builder(
-        itemExtent: _lineHeight,
+        itemExtent: _lineHeight * fontSize / 12.5,
         itemCount: lines.length,
         itemBuilder: (context, i) {
           final line = lines[i];

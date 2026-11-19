@@ -288,6 +288,7 @@ void main() {
               200);
         }
         if (p.endsWith('/status')) return http.Response(jsonEncode({'statuses': []}), 200);
+        if (p == '/repos/o/r/pulls/5/comments') return http.Response('[]', 200);
         return http.Response('{}', 404);
       });
 
@@ -350,6 +351,65 @@ void main() {
         api.pullRequestAction('t', 'o', 'r', 5, const ReviewPullRequest(ReviewEvent.approve)),
         throwsA(isA<ServerException>().having((e) => e.message, 'm', contains('Can not approve your own pull request'))),
       );
+    });
+  });
+
+  group('review comments on diff lines', () {
+    test('are loaded as threads and shown in the conversation with their location', () async {
+      final client = MockClient((req) async {
+        final p = req.url.path;
+        if (p == '/repos/o/r/pulls/5') {
+          return http.Response(
+              jsonEncode({
+                'number': 5,
+                'title': 'T',
+                'state': 'open',
+                'html_url': 'https://github.com/o/r/pull/5',
+                'user': {'login': 'ana'},
+                'head': {'ref': 'f', 'sha': 'abc', 'repo': {'full_name': 'o/r'}},
+                'base': {'ref': 'main'},
+              }),
+              200);
+        }
+        if (p == '/repos/o/r/pulls/5/comments') {
+          return http.Response(
+              jsonEncode([
+                {'id': 1, 'user': {'login': 'eve'}, 'body': 'Why 3?', 'path': 'a.dart', 'line': 3, 'side': 'RIGHT',
+                  'created_at': '2026-11-19T10:00:00Z'},
+                {'id': 2, 'user': {'login': 'ana'}, 'body': 'Retries', 'path': 'a.dart', 'line': 3, 'side': 'RIGHT',
+                  'created_at': '2026-11-19T11:00:00Z', 'in_reply_to_id': 1},
+                {'id': 3, 'user': {'login': 'bob'}, 'body': 'Old', 'path': 'a.dart', 'line': null, 'side': 'LEFT',
+                  'created_at': '2026-11-18T10:00:00Z'},
+              ]),
+              200);
+        }
+        if (p.endsWith('/status')) return http.Response('{"statuses":[]}', 200);
+        if (p.endsWith('/check-runs')) return http.Response('{"check_runs":[]}', 200);
+        return http.Response('[]', 200);
+      });
+      final bundle = await GitHubRemoteDataSource(client).fetchPullRequestBundle('t', 'o', 'r', 5);
+      final threads = bundle.threadsFor('a.dart');
+      expect(threads, hasLength(2));
+      final live = threads.firstWhere((t) => !t.first.isOutdated);
+      expect(live.map((c) => c.body), ['Why 3?', 'Retries']);
+      expect(live.first.side, DiffSide.right);
+      expect(threads.firstWhere((t) => t.first.isOutdated).first.side, DiffSide.left);
+      expect(bundle.timeline.map((e) => e.location), ['a.dart (outdated)', 'a.dart:3']);
+    });
+
+    test('new comments and replies send the right payloads', () async {
+      final calls = <String>[];
+      final api = GitHubRemoteDataSource(MockClient((req) async {
+        calls.add('${req.method} ${req.url.path} ${req.body}');
+        return http.Response('{}', 201);
+      }));
+      await api.pullRequestAction('t', 'o', 'r', 5,
+          const CommentOnLine(path: 'a.dart', line: 7, side: DiffSide.left, body: 'Hm', commitSha: 'abc'));
+      await api.pullRequestAction('t', 'o', 'r', 5, const ReplyToReviewComment(1, 'Done'));
+      expect(calls, [
+        'POST /repos/o/r/pulls/5/comments {"body":"Hm","commit_id":"abc","path":"a.dart","line":7,"side":"LEFT"}',
+        'POST /repos/o/r/pulls/5/comments/1/replies {"body":"Done"}',
+      ]);
     });
   });
 }

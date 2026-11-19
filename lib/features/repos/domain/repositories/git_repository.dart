@@ -24,7 +24,8 @@ abstract interface class GitRepository {
 
   Future<Result<GitCommitDetail>> loadCommitDetail(RepoHandle repo, String sha);
 
-  Future<Result<FileDiff>> loadDiff(RepoHandle repo, DiffTarget target);
+  /// [ignoreWhitespace]: como `git diff -w`.
+  Future<Result<FileDiff>> loadDiff(RepoHandle repo, DiffTarget target, {bool ignoreWhitespace = false});
 
   Future<Result<FileContent>> loadFileContent(RepoHandle repo, DiffTarget target);
 

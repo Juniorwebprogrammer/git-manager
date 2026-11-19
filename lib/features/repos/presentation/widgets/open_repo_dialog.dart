@@ -5,8 +5,10 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../../core/di/providers.dart';
+import '../../../../core/settings/app_settings.dart';
 import '../../../../core/error/result.dart';
 import '../../domain/entities/remote_repository.dart';
+import '../state/repo_notifier.dart';
 import 'ui_helpers.dart';
 
 /// Abre un repo local o clona uno de GitHub. Devuelve la ruta a abrir.
@@ -172,7 +174,19 @@ class _CloneTabState extends ConsumerState<_CloneTab> {
     final url = _url.text.trim();
     if (url.isEmpty || _destination == null) return;
     setState(() => _cloning = true);
+    final watch = Stopwatch()..start();
     final result = await ref.read(gitRepositoryProvider).clone(widget.accountId, url, _destination!);
+    // Clones largos (o con la ventana en segundo plano): avisar al terminar.
+    final lifecycle = WidgetsBinding.instance.lifecycleState;
+    if (ref.read(appSettingsProvider).notifications &&
+        (watch.elapsed >= ref.read(notificationThresholdProvider) ||
+            (lifecycle != null && lifecycle != AppLifecycleState.resumed))) {
+      final name = url.split('/').last.replaceAll('.git', '');
+      await ref.read(systemLauncherProvider).notify(
+            result is Success ? 'Clone finished' : 'Clone failed',
+            result is Success ? '$name is ready' : name,
+          );
+    }
     if (!mounted) return;
     setState(() => _cloning = false);
     switch (result) {

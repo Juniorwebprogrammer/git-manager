@@ -8,7 +8,9 @@ import '../../../accounts/presentation/state/accounts_notifier.dart';
 import '../../../accounts/presentation/widgets/account_avatar.dart';
 import '../state/repo_notifier.dart';
 import '../state/workspace_notifier.dart';
+import '../widgets/command_palette.dart';
 import '../widgets/open_repo_dialog.dart';
+import '../widgets/settings_dialog.dart';
 import '../widgets/ui_helpers.dart';
 import 'repo_view.dart';
 
@@ -41,8 +43,21 @@ class WorkspacePage extends ConsumerWidget {
       );
     }
 
+    Future<void> palette() => showCommandPalette(
+          context,
+          buildPaletteCommands(
+            context,
+            ref,
+            repo: workspace.activePath == null ? null : (accountId: accountId, path: workspace.activePath!),
+            tabs: workspace.tabs,
+            switchTab: notifier.activate,
+            openRepository: () => _openRepo(context, ref),
+          ),
+        );
+
     return CallbackShortcuts(
       bindings: {
+        const SingleActivator(LogicalKeyboardKey.keyP, control: true, shift: true): palette,
         const SingleActivator(LogicalKeyboardKey.keyT, control: true): () => _openRepo(context, ref),
         const SingleActivator(LogicalKeyboardKey.keyW, control: true): () {
           if (workspace.tabs.isNotEmpty) notifier.close(workspace.activeIndex);
@@ -109,6 +124,17 @@ class WorkspacePage extends ConsumerWidget {
                         ],
                       ),
                     ),
+                    IconButton(
+                      tooltip: 'Command palette (Ctrl+Shift+P)',
+                      onPressed: palette,
+                      icon: const Icon(Icons.search),
+                    ),
+                    IconButton(
+                      tooltip: 'Settings',
+                      onPressed: () => showSettingsDialog(context),
+                      icon: const Icon(Icons.settings_outlined),
+                    ),
+                    const SizedBox(width: 4),
                   ],
                 ),
               ),

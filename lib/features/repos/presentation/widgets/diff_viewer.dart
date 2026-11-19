@@ -1,3 +1,5 @@
+import 'dart:math' as math;
+
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -7,7 +9,9 @@ import '../../domain/entities/git_action.dart';
 import '../../domain/patch/patch_builder.dart';
 import '../../domain/repositories/git_repository.dart';
 import '../state/repo_notifier.dart';
+import '../../../../core/settings/app_settings.dart';
 import 'code_highlighter.dart';
+import 'code_view_style.dart';
 import 'conflict_editor.dart';
 import 'ui_helpers.dart';
 
@@ -47,13 +51,18 @@ class _DiffViewerState extends ConsumerState<DiffViewer> {
     // Ficheros en conflicto: editor de conflictos en lugar del diff.
     if (target.conflicted) return ConflictEditor(repo: widget.repo, target: target);
 
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.stretch,
-      children: [
-        _Header(repo: widget.repo, target: target, diff: state.diff, mode: _mode, onMode: _setMode),
-        const Divider(height: 1),
-        Expanded(child: _body(context, state, target)),
-      ],
+    final ignoreWhitespace = ref.watch(appSettingsProvider.select((s) => s.ignoreWhitespace));
+    return CodeViewStyleScope(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          _Header(repo: widget.repo, target: target, diff: state.diff, mode: _mode, onMode: _setMode),
+          const Divider(height: 1),
+          if (ignoreWhitespace && target.source != DiffSource.commit && _mode != _ViewMode.file)
+            const _InfoBar('Whitespace changes are hidden, so staging by hunk or line is disabled.'),
+          Expanded(child: _body(context, state, target)),
+        ],
+      ),
     );
   }
 
@@ -74,7 +83,9 @@ class _DiffViewerState extends ConsumerState<DiffViewer> {
     if (diff == null) return const Center(child: CircularProgressIndicator());
     if (diff.isBinary) return const _Notice('Binary file changed — no text diff to show.');
     if (diff.hunks.isEmpty) return const _Notice('No textual changes (mode or whitespace-only change).');
-    final partial = target.supportsPartialStaging ? _applyPartial : null;
+    final ignoreWhitespace = ref.read(appSettingsProvider).ignoreWhitespace;
+    // Un diff con -w omite líneas: su parche no se aplicaría bien.
+    final partial = target.supportsPartialStaging && !ignoreWhitespace ? _applyPartial : null;
     return _mode == _ViewMode.split
         ? _SplitDiff(diff: diff, highlighter: highlighter, source: target.source, onPartial: partial)
         : _UnifiedDiff(diff: diff, highlighter: highlighter, source: target.source, onPartial: partial);
@@ -152,12 +163,23 @@ List<Widget> Function(bool compact) _hunkActions(DiffSource source, DiffHunk hun
 }
 
 /// Diff de solo lectura (p. ej. de los ficheros de una PR), con vista
-/// unificada o lado a lado.
+/// unificada o lado a lado. Opcionalmente, contenido bajo cada línea y una
+/// acción al pulsar el margen (comentarios de review).
 class PatchView extends StatefulWidget {
   final FileDiff diff;
   final String path;
+  final Widget? Function(DiffLine line)? lineFooter;
+  final void Function(DiffLine line)? onGutterTap;
+  final String gutterTooltip;
 
-  const PatchView({super.key, required this.diff, required this.path});
+  const PatchView({
+    super.key,
+    required this.diff,
+    required this.path,
+    this.lineFooter,
+    this.onGutterTap,
+    this.gutterTooltip = '',
+  });
 
   @override
   State<PatchView> createState() => _PatchViewState();
@@ -177,29 +199,106 @@ class _PatchViewState extends State<PatchView> {
     } else {
       body = _split
           ? _SplitDiff(diff: widget.diff, highlighter: highlighter, source: DiffSource.commit)
-          : _UnifiedDiff(diff: widget.diff, highlighter: highlighter, source: DiffSource.commit);
+          : _UnifiedDiff(
+              diff: widget.diff,
+              highlighter: highlighter,
+              source: DiffSource.commit,
+              lineFooter: widget.lineFooter,
+              onGutterTap: widget.onGutterTap,
+              gutterTooltip: widget.gutterTooltip,
+            );
     }
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.stretch,
-      children: [
-        Align(
-          alignment: Alignment.centerRight,
-          child: Padding(
+    return CodeViewStyleScope(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Padding(
             padding: const EdgeInsets.fromLTRB(8, 4, 8, 4),
-            child: SegmentedButton<bool>(
-              showSelectedIcon: false,
-              style: const ButtonStyle(visualDensity: VisualDensity.compact),
-              segments: const [
-                ButtonSegment(value: false, tooltip: 'Unified diff', icon: Icon(Icons.view_agenda_outlined, size: 16)),
-                ButtonSegment(value: true, tooltip: 'Side-by-side diff', icon: Icon(Icons.vertical_split_outlined, size: 16)),
+            child: Row(
+              mainAxisAlignment: MainAxisAlignment.end,
+              children: [
+                const _ViewToggles(includeWhitespace: false),
+                const SizedBox(width: 6),
+                SegmentedButton<bool>(
+                  showSelectedIcon: false,
+                  style: const ButtonStyle(visualDensity: VisualDensity.compact),
+                  segments: const [
+                    ButtonSegment(value: false, tooltip: 'Unified diff', icon: Icon(Icons.view_agenda_outlined, size: 16)),
+                    ButtonSegment(
+                        value: true, tooltip: 'Side-by-side diff', icon: Icon(Icons.vertical_split_outlined, size: 16)),
+                  ],
+                  selected: {_split},
+                  onSelectionChanged: (s) => setState(() => _split = s.first),
+                ),
               ],
-              selected: {_split},
-              onSelectionChanged: (s) => setState(() => _split = s.first),
             ),
           ),
+          Expanded(child: body),
+        ],
+      ),
+    );
+  }
+}
+
+/// Interruptores de vista: ignorar espacios y ajustar líneas largas.
+class _ViewToggles extends ConsumerWidget {
+  final bool includeWhitespace;
+
+  const _ViewToggles({this.includeWhitespace = true});
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final settings = ref.watch(appSettingsProvider);
+    final notifier = ref.read(appSettingsProvider.notifier);
+    Widget toggle(String tooltip, IconData icon, bool value, ValueChanged<bool> onChanged) => IconButton(
+          tooltip: tooltip,
+          isSelected: value,
+          onPressed: () => onChanged(!value),
+          icon: Icon(icon, size: 18),
+          style: IconButton.styleFrom(
+            backgroundColor: value ? Theme.of(context).colorScheme.primary.withValues(alpha: 0.18) : null,
+          ),
+          visualDensity: VisualDensity.compact,
+          padding: EdgeInsets.zero,
+          constraints: const BoxConstraints(minWidth: 30, minHeight: 30),
+        );
+    return Row(mainAxisSize: MainAxisSize.min, children: [
+      if (includeWhitespace)
+        toggle(
+          settings.ignoreWhitespace ? 'Showing changes without whitespace — click to show all' : 'Ignore whitespace changes',
+          Icons.space_bar,
+          settings.ignoreWhitespace,
+          (v) => notifier.update((s) => s.copyWith(ignoreWhitespace: v)),
         ),
-        Expanded(child: body),
-      ],
+      toggle(
+        settings.wrapLines ? 'Long lines wrap — click to scroll horizontally' : 'Wrap long lines',
+        Icons.wrap_text,
+        settings.wrapLines,
+        (v) => notifier.update((s) => s.copyWith(wrapLines: v)),
+      ),
+    ]);
+  }
+}
+
+class _InfoBar extends StatelessWidget {
+  final String text;
+
+  const _InfoBar(this.text);
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return Container(
+      color: theme.colorScheme.secondaryContainer.withValues(alpha: 0.5),
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+      child: Row(children: [
+        Icon(Icons.info_outline, size: 14, color: theme.colorScheme.onSecondaryContainer),
+        const SizedBox(width: 6),
+        Expanded(
+          child: Text(text,
+              style: theme.textTheme.labelSmall?.copyWith(color: theme.colorScheme.onSecondaryContainer)),
+        ),
+      ]),
     );
   }
 }
@@ -304,6 +403,7 @@ class _Header extends ConsumerWidget {
               onPressed: () =>
                   stageOrUnstage(target.source == DiffSource.staged ? UnstageAction(paths) : StageAction(paths)),
             ),
+          const _ViewToggles(),
           _FileButton(
             tooltip: 'File history',
             icon: Icons.history,
@@ -373,8 +473,16 @@ class _Header extends ConsumerWidget {
                   children: [
                     fileIcon,
                     const SizedBox(width: 8),
-                    Expanded(child: info),
-                    ...actions,
+                    Expanded(flex: 2, child: info),
+                    // Las acciones bajan de línea si no caben, en vez de desbordar.
+                    Flexible(
+                      flex: 3,
+                      child: Wrap(
+                        alignment: WrapAlignment.end,
+                        crossAxisAlignment: WrapCrossAlignment.center,
+                        children: actions,
+                      ),
+                    ),
                   ],
                 ),
         );
@@ -488,7 +596,22 @@ class _UnifiedDiff extends StatefulWidget {
   final DiffSource source;
   final _PartialCallback? onPartial;
 
-  const _UnifiedDiff({required this.diff, required this.highlighter, required this.source, this.onPartial});
+  /// Contenido extra bajo una línea (p. ej. comentarios de una PR).
+  final Widget? Function(DiffLine line)? lineFooter;
+
+  /// Clic en el margen de una línea (si no hay selección de líneas).
+  final void Function(DiffLine line)? onGutterTap;
+  final String gutterTooltip;
+
+  const _UnifiedDiff({
+    required this.diff,
+    required this.highlighter,
+    required this.source,
+    this.onPartial,
+    this.lineFooter,
+    this.onGutterTap,
+    this.gutterTooltip = '',
+  });
 
   @override
   State<_UnifiedDiff> createState() => _UnifiedDiffState();
@@ -567,8 +690,9 @@ class _UnifiedDiffState extends State<_UnifiedDiff> {
         for (var l = 0; l < widget.diff.hunks[h].lines.length; l++) (h, l),
       ],
     ];
-    final base = monoStyle(context);
-    final gutter = monoStyle(context, size: 11.5, color: colors.gutterText);
+    final style = CodeViewStyle.of(context);
+    final base = monoStyle(context, size: style.fontSize);
+    final gutter = monoStyle(context, size: style.fontSize - 1, color: colors.gutterText);
     final selectable = widget.onPartial != null;
     final selectionColor = theme.colorScheme.primary.withValues(alpha: 0.28);
 
@@ -599,6 +723,21 @@ class _UnifiedDiffState extends State<_UnifiedDiff> {
               ),
             ],
           );
+          final onGutterTap = widget.onGutterTap;
+          if (!selectable && onGutterTap != null && line.type != DiffLineType.meta) {
+            gutterArea = MouseRegion(
+              cursor: SystemMouseCursors.click,
+              child: Tooltip(
+                message: widget.gutterTooltip,
+                waitDuration: const Duration(milliseconds: 700),
+                child: GestureDetector(
+                  behavior: HitTestBehavior.opaque,
+                  onTap: () => onGutterTap(line),
+                  child: gutterArea,
+                ),
+              ),
+            );
+          }
           if (selectable && _isChange(line)) {
             gutterArea = MouseRegion(
               cursor: SystemMouseCursors.click,
@@ -613,7 +752,7 @@ class _UnifiedDiffState extends State<_UnifiedDiff> {
               ),
             );
           }
-          return Container(
+          final row = Container(
             decoration: BoxDecoration(
               color: bg,
               border: selected ? Border(left: BorderSide(color: theme.colorScheme.primary, width: 3)) : null,
@@ -629,20 +768,32 @@ class _UnifiedDiffState extends State<_UnifiedDiff> {
                             line.text,
                             style: base.copyWith(fontStyle: FontStyle.italic, color: colors.gutterText),
                           )
-                        : Text.rich(highlighter.highlight(line.text, base)),
+                        : Text.rich(highlighter.highlight(line.text, base), softWrap: style.wrap),
                   ),
                 ],
               ),
             ),
           );
+          final footer = widget.lineFooter?.call(line);
+          return footer == null ? row : Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [row, footer]);
         },
       ),
     );
 
-    if (_count == 0) return list;
+    final body = style.wrap
+        ? list
+        : HorizontalCodeScroll(
+            maxChars: widget.diff.hunks
+                .expand((h) => h.lines)
+                .fold(0, (m, l) => math.max(m, HorizontalCodeScroll.visualLength(l.text))),
+            fontSize: style.fontSize,
+            gutterWidth: 52.0 * 2 + 18,
+            child: list,
+          );
+    if (_count == 0) return body;
     return Column(
       children: [
-        Expanded(child: list),
+        Expanded(child: body),
         _SelectionBar(
           count: _count,
           source: widget.source,
@@ -752,8 +903,9 @@ class _SplitDiff extends StatelessWidget {
     final theme = Theme.of(context);
     final colors = _DiffColors(theme);
     final rows = _pairs();
-    final base = monoStyle(context);
-    final gutter = monoStyle(context, size: 11.5, color: colors.gutterText);
+    final style = CodeViewStyle.of(context);
+    final base = monoStyle(context, size: style.fontSize);
+    final gutter = monoStyle(context, size: style.fontSize - 1, color: colors.gutterText);
 
     Widget side(DiffLine? line, bool left) {
       final number = line == null ? null : (left ? line.oldNumber : line.newNumber);
@@ -811,10 +963,11 @@ class _FileView extends StatelessWidget {
     final lines = content.text.split('\n');
     if (lines.isNotEmpty && lines.last.isEmpty) lines.removeLast();
     final colors = _DiffColors(Theme.of(context));
-    final base = monoStyle(context);
-    final gutter = monoStyle(context, size: 11.5, color: colors.gutterText);
+    final style = CodeViewStyle.of(context);
+    final base = monoStyle(context, size: style.fontSize);
+    final gutter = monoStyle(context, size: style.fontSize - 1, color: colors.gutterText);
 
-    return SelectionArea(
+    final list = SelectionArea(
       child: ListView.builder(
         itemCount: lines.length + (content.truncated ? 1 : 0),
         itemBuilder: (context, i) {
@@ -824,11 +977,18 @@ class _FileView extends StatelessWidget {
             children: [
               _Gutter(i + 1, gutter),
               const SizedBox(width: 12),
-              Expanded(child: Text.rich(highlighter.highlight(lines[i], base))),
+              Expanded(child: Text.rich(highlighter.highlight(lines[i], base), softWrap: style.wrap)),
             ],
           );
         },
       ),
+    );
+    if (style.wrap) return list;
+    return HorizontalCodeScroll(
+      maxChars: lines.fold(0, (m, l) => math.max(m, HorizontalCodeScroll.visualLength(l))),
+      fontSize: style.fontSize,
+      gutterWidth: 64,
+      child: list,
     );
   }
 }

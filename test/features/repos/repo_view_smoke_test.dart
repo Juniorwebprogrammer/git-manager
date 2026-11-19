@@ -22,6 +22,7 @@ import 'package:git_manager/features/repos/domain/entities/repo_extras.dart';
 import 'package:git_manager/features/repos/domain/entities/remote_repository.dart';
 import 'package:git_manager/features/repos/domain/entities/repo_snapshot.dart';
 import 'package:git_manager/features/repos/domain/repositories/git_repository.dart';
+import 'package:git_manager/core/settings/app_settings.dart';
 import 'package:git_manager/core/theme/app_theme.dart';
 import 'package:git_manager/features/accounts/domain/entities/git_account.dart';
 import 'package:git_manager/features/accounts/domain/repositories/account_repository.dart';
@@ -32,6 +33,8 @@ import 'package:git_manager/features/repos/presentation/widgets/pull_request_vie
 import 'package:git_manager/features/repos/presentation/widgets/file_history_view.dart';
 import 'package:git_manager/features/repos/presentation/widgets/compare_panel.dart';
 import 'package:git_manager/features/repos/presentation/widgets/blame_view.dart';
+import 'package:git_manager/features/repos/presentation/widgets/code_view_style.dart';
+import 'package:git_manager/features/repos/presentation/state/repo_notifier.dart';
 import 'package:git_manager/core/system/system_launcher.dart';
 import 'package:git_manager/features/repos/presentation/widgets/commit_detail_panel.dart';
 import 'package:git_manager/features/repos/presentation/widgets/conflict_editor.dart';
@@ -66,7 +69,8 @@ class _CliGitRepository implements GitRepository {
   Future<Result<GitCommitDetail>> loadCommitDetail(RepoHandle repo, String sha) =>
       _wrap(() => cli.commitDetail(repo.path, sha));
   @override
-  Future<Result<FileDiff>> loadDiff(RepoHandle repo, DiffTarget target) => _wrap(() => cli.diff(repo.path, target));
+  Future<Result<FileDiff>> loadDiff(RepoHandle repo, DiffTarget target, {bool ignoreWhitespace = false}) =>
+      _wrap(() => cli.diff(repo.path, target, ignoreWhitespace: ignoreWhitespace));
   @override
   Future<Result<FileContent>> loadFileContent(RepoHandle repo, DiffTarget target) =>
       _wrap(() => cli.fileContent(repo.path, target));
@@ -157,6 +161,14 @@ class _CliGitRepository implements GitRepository {
           PullRequestCheck(name: 'build', status: CiStatus.success, detail: 'success', url: 'https://ci/1'),
           PullRequestCheck(name: 'tests', status: CiStatus.pending, detail: 'in_progress'),
         ],
+        reviewComments: [
+          ReviewComment(id: 1, author: 'eve', body: 'Why three retries?', path: 'login.dart', line: 3,
+              side: DiffSide.right, date: DateTime(2026, 11, 19, 9)),
+          ReviewComment(id: 2, author: 'octo', body: 'Matches the backend limit', path: 'login.dart', line: 3,
+              side: DiffSide.right, date: DateTime(2026, 11, 19, 9, 30), inReplyTo: 1),
+          ReviewComment(id: 3, author: 'bob', body: 'Rename this class', path: 'login.dart', line: null,
+              side: DiffSide.right, date: DateTime(2026, 11, 18)),
+        ],
       ));
 
   @override
@@ -193,6 +205,13 @@ class _CliGitRepository implements GitRepository {
 }
 
 class _MockAccountRepository extends Mock implements AccountRepository {}
+
+class _MemorySettingsStore implements SettingsStore {
+  @override
+  Future<Map<String, Object?>> load() async => const {};
+  @override
+  Future<void> save(Map<String, Object> values) async {}
+}
 
 class _FixedWorkspace implements WorkspaceRepository {
   final List<String> tabs;
@@ -257,7 +276,7 @@ void main() {
     }
   }
 
-  Future<void> pumpWorkspace(WidgetTester tester, Size size) async {
+  Future<void> pumpWorkspace(WidgetTester tester, Size size, {List<dynamic> overrides = const []}) async {
     tester.view.physicalSize = size;
     tester.view.devicePixelRatio = 1;
     addTearDown(tester.view.reset);
@@ -272,12 +291,14 @@ void main() {
           workspaceRepositoryProvider.overrideWithValue(_FixedWorkspace([repo])),
         // Nunca abrir terminales/editores de verdad desde los tests.
         systemLauncherProvider.overrideWithValue(SystemLauncher(
-          exists: (e) async => e == 'code' || e == 'x-terminal-emulator',
+          exists: (e) async => e == 'code' || e == 'x-terminal-emulator' || e == 'notify-send',
           start: (c) async => launched.add(c),
           operatingSystem: 'linux',
           environment: const {},
           resolveLink: (_) async => '/usr/bin/ptyxis',
         )),
+        settingsStoreProvider.overrideWithValue(_MemorySettingsStore()),
+        ...overrides.cast(),
         ],
         child: MaterialApp(
           theme: AppTheme.dark(),
@@ -471,6 +492,81 @@ void main() {
     ]);
   });
 
+  testWidgets('settings: theme, font size and toggles are stored', (tester) async {
+    await pumpWorkspace(tester, const Size(1280, 720));
+    await tester.tap(find.byTooltip('Settings'));
+    await settle(tester);
+    await tester.tap(find.text('Light'));
+    await settle(tester);
+    await tester.tap(find.text('Wrap long lines'));
+    await settle(tester);
+    final container = ProviderScope.containerOf(tester.element(find.byType(WorkspacePage)));
+    expect(container.read(appSettingsProvider).themeMode, ThemeMode.light);
+    expect(container.read(appSettingsProvider).wrapLines, isFalse);
+    await tester.tap(find.text('Done'));
+    await settle(tester);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('diff toggles: ignore whitespace disables partial staging, no-wrap scrolls', (tester) async {
+    await pumpWorkspace(tester, const Size(1280, 720));
+    await tester.tap(find.text('main.dart').first);
+    await settle(tester);
+    expect(find.text('Stage hunk'), findsOneWidget);
+
+    await tester.tap(find.byTooltip('Ignore whitespace changes'));
+    await settle(tester);
+    expect(find.textContaining('staging by hunk or line is disabled'), findsOneWidget);
+    expect(find.text('Stage hunk'), findsNothing);
+
+    await tester.tap(find.byTooltip('Long lines wrap — click to scroll horizontally'));
+    await settle(tester);
+    expect(find.byType(HorizontalCodeScroll), findsOneWidget);
+    expect(tester.takeException(), isNull);
+  });
+
+  for (final size in const [Size(1280, 720), Size(900, 600)]) {
+    testWidgets('command palette at ${size.width.toInt()}px: search and run with the keyboard', (tester) async {
+      await pumpWorkspace(tester, size);
+      await tester.sendKeyDownEvent(LogicalKeyboardKey.controlLeft);
+      await tester.sendKeyDownEvent(LogicalKeyboardKey.shiftLeft);
+      await tester.sendKeyEvent(LogicalKeyboardKey.keyP);
+      await tester.sendKeyUpEvent(LogicalKeyboardKey.shiftLeft);
+      await tester.sendKeyUpEvent(LogicalKeyboardKey.controlLeft);
+      await settle(tester);
+      expect(find.textContaining('Type a command'), findsOneWidget);
+
+      await tester.enterText(find.byType(TextField).last, 'blame main');
+      await settle(tester);
+      expect(find.text('Blame: main.dart'), findsOneWidget);
+      await tester.sendKeyEvent(LogicalKeyboardKey.arrowDown);
+      await tester.sendKeyEvent(LogicalKeyboardKey.arrowUp);
+      await tester.sendKeyEvent(LogicalKeyboardKey.enter);
+      await settle(tester);
+      expect(find.byType(BlameView), findsOneWidget);
+      expect(tester.takeException(), isNull);
+    });
+  }
+
+  group('notifications', () {
+    setUp(() async {
+      final bare = '${tmp.path}/origin.git';
+      await runner.run(['init', '-q', '--bare', '-b', 'main', bare], workingDirectory: tmp.path);
+      await runner.run(['remote', 'add', 'origin', bare], workingDirectory: repo);
+    });
+
+    testWidgets('a finished fetch shows a system notification', (tester) async {
+      await pumpWorkspace(tester, const Size(1280, 720),
+          overrides: [notificationThresholdProvider.overrideWithValue(Duration.zero)]);
+      await tester.tap(find.byTooltip('Fetch all remotes'));
+      await settle(tester);
+      expect(
+        launched.map((c) => c.toString()),
+        contains('notify-send --app-name=Git Manager --icon=git Fetch finished demo (main)'),
+      );
+    });
+  });
+
   group('worktrees', () {
     late String wt;
     setUp(() async {
@@ -633,11 +729,50 @@ void main() {
         await tester.tap(find.byTooltip('Files changed'));
         await settle(tester);
         expect(find.byType(PatchView), findsOneWidget);
-        expect(find.textContaining('retries'), findsOneWidget);
+        expect(find.textContaining('retries'), findsWidgets);
         await tester.tap(find.byTooltip('Checks'));
         await settle(tester);
         expect(find.text('build'), findsOneWidget);
         expect(find.text('in_progress'), findsOneWidget);
+
+        // Comentarios en líneas del diff: hilo existente, respuesta y comentario nuevo.
+        await tester.tap(find.byTooltip('Files changed'));
+        await settle(tester);
+        expect(find.text('Why three retries?'), findsOneWidget);
+        expect(find.text('Matches the backend limit'), findsOneWidget);
+        expect(find.textContaining('1 outdated comment thread'), findsOneWidget);
+        await tester.ensureVisible(find.byTooltip('Click to comment on this line').first);
+        await settle(tester);
+        await tester.tap(find.byTooltip('Click to comment on this line').first);
+        await settle(tester);
+        await tester.enterText(find.widgetWithText(TextField, 'Comment on line 1 · Ctrl+Enter to send'), 'Make this a const');
+        await settle(tester);
+        await tester.ensureVisible(find.widgetWithText(FilledButton, 'Add comment'));
+        await settle(tester);
+        await tester.tap(find.widgetWithText(FilledButton, 'Add comment'));
+        await settle(tester);
+        final comment = git.prOps.last as CommentOnLine;
+        expect((comment.path, comment.line, comment.side, comment.commitSha, comment.body),
+            ('login.dart', 1, DiffSide.right, 'abc', 'Make this a const'));
+        // Esperar a que se vaya el aviso flotante (en ventanas bajas tapa el hilo).
+        await tester.pump(const Duration(seconds: 3));
+        await settle(tester);
+
+        await tester.ensureVisible(find.widgetWithText(TextButton, 'Reply').first);
+        await settle(tester);
+        await tester.tap(find.widgetWithText(TextButton, 'Reply').first);
+        await settle(tester);
+        await tester.enterText(find.widgetWithText(TextField, 'Reply… · Ctrl+Enter to send'), 'Thanks, makes sense');
+        await settle(tester);
+        await tester.ensureVisible(find.widgetWithText(FilledButton, 'Add comment'));
+        await settle(tester);
+        await tester.tap(find.widgetWithText(FilledButton, 'Add comment'));
+        await settle(tester);
+        final reply = git.prOps.last as ReplyToReviewComment;
+        expect((reply.commentId, reply.body), (1, 'Thanks, makes sense'));
+        await tester.tap(find.byTooltip('Conversation'));
+        await settle(tester);
+        expect(find.textContaining('commented on login.dart:3'), findsNothing); // los hilos vienen de la API real
 
         // Review: aprobar.
         await tester.tap(find.widgetWithText(FilledButton, 'Review'));

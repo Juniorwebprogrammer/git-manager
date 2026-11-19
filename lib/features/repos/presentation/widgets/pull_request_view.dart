@@ -6,6 +6,7 @@ import 'package:url_launcher/url_launcher.dart';
 import '../../../../core/di/providers.dart';
 import '../../../../core/error/result.dart';
 import '../../data/parsers/git_parsers.dart';
+import '../../domain/entities/file_diff.dart';
 import '../../domain/entities/git_action.dart';
 import '../../domain/entities/pull_request.dart';
 import '../../domain/entities/pull_request_detail.dart';
@@ -109,7 +110,7 @@ class PullRequestView extends ConsumerWidget {
                 children: [
                   _ConversationTab(repo: repo, bundle: data),
                   _CommitsTab(repo: repo, commits: data.commits),
-                  _FilesTab(files: data.files),
+                  _FilesTab(repo: repo, bundle: data),
                   _ChecksTab(checks: data.checks),
                 ],
               ),
@@ -565,6 +566,7 @@ class _EventCard extends StatelessWidget {
       ReviewState.changesRequested => ('requested changes', _red, Icons.do_not_disturb_on_outlined),
       ReviewState.dismissed => ('review dismissed', const Color(0xFF8D96A0), Icons.remove_circle_outline),
       ReviewState.commented || ReviewState.pending => ('reviewed', _amber, Icons.rate_review_outlined),
+      null when event.location != null => ('commented on ${event.location}', theme.colorScheme.onSurfaceVariant, Icons.code),
       null => (highlight ? 'opened this pull request' : 'commented', theme.colorScheme.onSurfaceVariant, null),
     };
 
@@ -781,37 +783,120 @@ class _CommitsTab extends ConsumerWidget {
   }
 }
 
-class _FilesTab extends StatefulWidget {
-  final List<PullRequestFile> files;
+class _FilesTab extends ConsumerStatefulWidget {
+  final RepoHandle repo;
+  final PullRequestBundle bundle;
 
-  const _FilesTab({required this.files});
+  const _FilesTab({required this.repo, required this.bundle});
 
   @override
-  State<_FilesTab> createState() => _FilesTabState();
+  ConsumerState<_FilesTab> createState() => _FilesTabState();
 }
 
-class _FilesTabState extends State<_FilesTab> {
+class _FilesTabState extends ConsumerState<_FilesTab> {
   int _selected = 0;
+
+  /// Línea con el cuadro de "nuevo comentario" abierto.
+  ({DiffSide side, int line})? _composer;
+
+  /// Hilo (id del comentario raíz) con el cuadro de respuesta abierto.
+  int? _replyingTo;
+
+  int get _number => widget.bundle.detail.number;
+
+  Future<bool> _post(PullRequestOp op, String success) async {
+    final ok = await _runOp(context, ref, widget.repo, _number, op, success: success);
+    if (ok && mounted) {
+      setState(() {
+        _composer = null;
+        _replyingTo = null;
+      });
+    }
+    return ok;
+  }
+
+  /// Línea del diff → (lado, número) como los entiende GitHub.
+  static ({DiffSide side, int line})? _anchor(DiffLine l) => switch (l.type) {
+        DiffLineType.removed => l.oldNumber == null ? null : (side: DiffSide.left, line: l.oldNumber!),
+        DiffLineType.added || DiffLineType.context => l.newNumber == null ? null : (side: DiffSide.right, line: l.newNumber!),
+        DiffLineType.meta => null,
+      };
 
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    final files = widget.files;
+    final files = widget.bundle.files;
     if (files.isEmpty) return const Center(child: Text('No files changed.'));
     final index = _selected.clamp(0, files.length - 1);
     final file = files[index];
+    final threads = widget.bundle.threadsFor(file.path);
     final diff = file.patch == null
         ? parseUnifiedDiff(file.path, '')
         : parseUnifiedDiff(file.path, 'diff --git a/${file.path} b/${file.path}\n${file.patch}\n');
+
+    List<List<ReviewComment>> threadsAt(DiffLine l) {
+      final a = _anchor(l);
+      return [
+        for (final t in threads)
+          if (!t.first.isOutdated &&
+              ((a != null && t.first.side == a.side && t.first.line == a.line) ||
+                  // Las líneas de contexto existen en los dos lados.
+                  (l.type == DiffLineType.context && t.first.side == DiffSide.left && t.first.line == l.oldNumber)))
+            t,
+      ];
+    }
+
+    Widget? footer(DiffLine l) {
+      final here = threadsAt(l);
+      final a = _anchor(l);
+      final composing = a != null && _composer == a;
+      if (here.isEmpty && !composing) return null;
+      return Padding(
+        padding: const EdgeInsets.fromLTRB(70, 4, 12, 8),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            for (final t in here)
+              _Thread(
+                comments: t,
+                replying: _replyingTo == t.first.id,
+                onReply: () => setState(() => _replyingTo = t.first.id),
+                onCancel: () => setState(() => _replyingTo = null),
+                onSend: (text) => _post(ReplyToReviewComment(t.first.id, text), 'Reply posted'),
+              ),
+            if (composing)
+              _CommentComposer(
+                hint: 'Comment on line ${a.line}${a.side == DiffSide.left ? ' (old version)' : ''}',
+                onCancel: () => setState(() => _composer = null),
+                onSend: (text) => _post(
+                  CommentOnLine(
+                    path: file.path,
+                    line: a.line,
+                    side: a.side,
+                    body: text,
+                    commitSha: widget.bundle.detail.headSha,
+                  ),
+                  'Comment added on ${file.path}:${a.line}',
+                ),
+              ),
+          ],
+        ),
+      );
+    }
 
     final list = ListView.builder(
       itemCount: files.length,
       itemBuilder: (context, i) {
         final f = files[i];
+        final comments = widget.bundle.reviewComments.where((c) => c.path == f.path).length;
         return Material(
           color: i == index ? theme.colorScheme.primary.withValues(alpha: 0.16) : Colors.transparent,
           child: InkWell(
-            onTap: () => setState(() => _selected = i),
+            onTap: () => setState(() {
+              _selected = i;
+              _composer = null;
+              _replyingTo = null;
+            }),
             child: Padding(
               padding: const EdgeInsets.fromLTRB(12, 6, 10, 6),
               child: Row(
@@ -822,14 +907,21 @@ class _FilesTabState extends State<_FilesTab> {
                     child: Tooltip(
                       message: f.oldPath != null ? '${f.oldPath} → ${f.path}' : f.path,
                       waitDuration: const Duration(milliseconds: 600),
-                      child: Text(
-                        f.path,
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        style: theme.textTheme.bodySmall,
-                      ),
+                      child: Text(f.path, maxLines: 1, overflow: TextOverflow.ellipsis, style: theme.textTheme.bodySmall),
                     ),
                   ),
+                  if (comments > 0)
+                    Tooltip(
+                      message: '$comments comment${comments == 1 ? '' : 's'}',
+                      child: Padding(
+                        padding: const EdgeInsets.only(right: 6),
+                        child: Row(mainAxisSize: MainAxisSize.min, children: [
+                          Icon(Icons.chat_bubble_outline, size: 13, color: theme.colorScheme.primary),
+                          const SizedBox(width: 2),
+                          Text('$comments', style: theme.textTheme.labelSmall?.copyWith(color: theme.colorScheme.primary)),
+                        ]),
+                      ),
+                    ),
                   Text('+${f.additions}', style: theme.textTheme.labelSmall?.copyWith(color: _green)),
                   const SizedBox(width: 4),
                   Text('−${f.deletions}', style: theme.textTheme.labelSmall?.copyWith(color: _red)),
@@ -840,34 +932,213 @@ class _FilesTabState extends State<_FilesTab> {
         );
       },
     );
+
+    final outdated = threads.where((t) => t.first.isOutdated).toList();
+    final canComment = widget.bundle.detail.isOpen;
     final patch = file.patch == null
         ? Center(
-            child: Text(
-              'GitHub does not provide a text diff for this file (binary or too large).',
-              style: TextStyle(color: theme.colorScheme.onSurfaceVariant),
-            ),
+            child: Text('GitHub does not provide a text diff for this file (binary or too large).',
+                style: TextStyle(color: theme.colorScheme.onSurfaceVariant)),
           )
-        : PatchView(key: ValueKey(file.path), diff: diff, path: file.path);
-
-    return LayoutBuilder(
-      builder: (context, c) {
-        if (c.maxWidth < 760) {
-          return Column(
+        : Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
-              SizedBox(height: c.maxHeight * 0.32, child: list),
-              const Divider(height: 1),
-              Expanded(child: patch),
+              if (outdated.isNotEmpty)
+                ExpansionTile(
+                  dense: true,
+                  leading: const Icon(Icons.history_toggle_off, size: 18),
+                  title: Text('${outdated.length} outdated comment thread${outdated.length == 1 ? '' : 's'}'),
+                  childrenPadding: const EdgeInsets.fromLTRB(12, 0, 12, 8),
+                  children: [
+                    ConstrainedBox(
+                      constraints: const BoxConstraints(maxHeight: 220),
+                      child: ListView(shrinkWrap: true, children: [
+                        for (final t in outdated)
+                          _Thread(
+                            comments: t,
+                            replying: _replyingTo == t.first.id,
+                            onReply: () => setState(() => _replyingTo = t.first.id),
+                            onCancel: () => setState(() => _replyingTo = null),
+                            onSend: (text) => _post(ReplyToReviewComment(t.first.id, text), 'Reply posted'),
+                          ),
+                      ]),
+                    ),
+                  ],
+                ),
+              Expanded(
+                child: PatchView(
+                  key: ValueKey(file.path),
+                  diff: diff,
+                  path: file.path,
+                  lineFooter: footer,
+                  gutterTooltip: canComment ? 'Click to comment on this line' : '',
+                  onGutterTap: !canComment
+                      ? null
+                      : (l) {
+                          final a = _anchor(l);
+                          if (a != null) setState(() => _composer = a);
+                        },
+                ),
+              ),
             ],
           );
-        }
-        return Row(
+
+    return LayoutBuilder(builder: (context, c) {
+      if (c.maxWidth < 760) {
+        return Column(children: [
+          SizedBox(height: c.maxHeight * 0.28, child: list),
+          const Divider(height: 1),
+          Expanded(child: patch),
+        ]);
+      }
+      return Row(children: [
+        SizedBox(width: (c.maxWidth * 0.3).clamp(220.0, 360.0), child: list),
+        const VerticalDivider(width: 1),
+        Expanded(child: patch),
+      ]);
+    });
+  }
+}
+
+/// Un hilo de comentarios de código, con su respuesta opcional.
+class _Thread extends StatelessWidget {
+  final List<ReviewComment> comments;
+  final bool replying;
+  final VoidCallback onReply;
+  final VoidCallback onCancel;
+  final Future<bool> Function(String text) onSend;
+
+  const _Thread({
+    required this.comments,
+    required this.replying,
+    required this.onReply,
+    required this.onCancel,
+    required this.onSend,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return Container(
+      margin: const EdgeInsets.only(bottom: 6),
+      decoration: BoxDecoration(
+        color: theme.colorScheme.surfaceContainer,
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(color: theme.colorScheme.outlineVariant),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          for (final c in comments)
+            Padding(
+              padding: const EdgeInsets.fromLTRB(10, 8, 10, 4),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  Row(children: [
+                    InitialsAvatar(c.author, size: 18),
+                    const SizedBox(width: 6),
+                    Expanded(
+                      child: Text(c.author,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: theme.textTheme.bodySmall?.copyWith(fontWeight: FontWeight.w700)),
+                    ),
+                    if (c.date != null)
+                      Text(formatDate(c.date!.toLocal()),
+                          style: theme.textTheme.labelSmall?.copyWith(color: theme.colorScheme.onSurfaceVariant)),
+                  ]),
+                  const SizedBox(height: 4),
+                  _MarkdownText(c.body),
+                ],
+              ),
+            ),
+          if (replying)
+            Padding(
+              padding: const EdgeInsets.fromLTRB(10, 4, 10, 8),
+              child: _CommentComposer(hint: 'Reply…', onCancel: onCancel, onSend: onSend),
+            )
+          else
+            Align(
+              alignment: Alignment.centerLeft,
+              child: TextButton.icon(
+                onPressed: onReply,
+                icon: const Icon(Icons.reply, size: 16),
+                label: const Text('Reply'),
+              ),
+            ),
+        ],
+      ),
+    );
+  }
+}
+
+/// Cuadro para escribir un comentario o una respuesta.
+class _CommentComposer extends StatefulWidget {
+  final String hint;
+  final VoidCallback onCancel;
+  final Future<bool> Function(String text) onSend;
+
+  const _CommentComposer({required this.hint, required this.onCancel, required this.onSend});
+
+  @override
+  State<_CommentComposer> createState() => _CommentComposerState();
+}
+
+class _CommentComposerState extends State<_CommentComposer> {
+  final _text = TextEditingController();
+  bool _sending = false;
+
+  @override
+  void dispose() {
+    _text.dispose();
+    super.dispose();
+  }
+
+  Future<void> _send() async {
+    final text = _text.text.trim();
+    if (text.isEmpty || _sending) return;
+    setState(() => _sending = true);
+    await widget.onSend(text);
+    if (mounted) setState(() => _sending = false);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        CallbackShortcuts(
+          bindings: {
+            const SingleActivator(LogicalKeyboardKey.enter, control: true): _send,
+            const SingleActivator(LogicalKeyboardKey.escape): widget.onCancel,
+          },
+          child: TextField(
+            controller: _text,
+            autofocus: true,
+            minLines: 2,
+            maxLines: 8,
+            onChanged: (_) => setState(() {}),
+            decoration: InputDecoration(hintText: '${widget.hint} · Ctrl+Enter to send', hintMaxLines: 1),
+          ),
+        ),
+        const SizedBox(height: 6),
+        // Wrap: en paneles estrechos los botones bajan de línea.
+        Wrap(
+          alignment: WrapAlignment.end,
+          spacing: 6,
+          runSpacing: 4,
           children: [
-            SizedBox(width: (c.maxWidth * 0.32).clamp(240.0, 380.0), child: list),
-            const VerticalDivider(width: 1),
-            Expanded(child: patch),
+            TextButton(onPressed: _sending ? null : widget.onCancel, child: const Text('Cancel')),
+            FilledButton(
+              onPressed: _sending || _text.text.trim().isEmpty ? null : _send,
+              child: _sending
+                  ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2))
+                  : const Text('Add comment'),
+            ),
           ],
-        );
-      },
+        ),
+      ],
     );
   }
 }

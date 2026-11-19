@@ -127,7 +127,8 @@ class GitCliDataSource {
     return parseCommitHeader(header, parseNameStatus(nameStatus));
   }
 
-  Future<FileDiff> diff(String path, DiffTarget t) async {
+  Future<FileDiff> diff(String path, DiffTarget t, {bool ignoreWhitespace = false}) async {
+    final ws = ignoreWhitespace ? const ['-w'] : const <String>[];
     final paths = ['--', if (t.oldPath != null) t.oldPath!, t.path];
 
     switch (t.source) {
@@ -137,7 +138,7 @@ class GitCliDataSource {
           if (content.isBinary) return FileDiff(path: t.path, isBinary: true);
           return allAddedDiff(t.path, content.text);
         }
-        final out = await _git.run(['diff', '--no-ext-diff', '-M', ...paths], workingDirectory: path);
+        final out = await _git.run(['diff', '--no-ext-diff', '-M', ...ws, ...paths], workingDirectory: path);
         if (out.startsWith('diff --cc')) {
           // Fichero en conflicto: mostramos el fichero con los marcadores.
           final content = await _readWorkingFile(path, t.path);
@@ -145,13 +146,13 @@ class GitCliDataSource {
         }
         return parseUnifiedDiff(t.path, out);
       case DiffSource.staged:
-        final out = await _git.run(['diff', '--cached', '--no-ext-diff', '-M', ...paths], workingDirectory: path);
+        final out = await _git.run(['diff', '--cached', '--no-ext-diff', '-M', ...ws, ...paths], workingDirectory: path);
         return parseUnifiedDiff(t.path, out);
       case DiffSource.commit:
         final out = t.parentSha == null
-            ? await _git.run(['diff-tree', '-p', '--no-ext-diff', '-M', '--root', '--no-commit-id', t.commitSha!, ...paths],
+            ? await _git.run(['diff-tree', '-p', '--no-ext-diff', '-M', ...ws, '--root', '--no-commit-id', t.commitSha!, ...paths],
                 workingDirectory: path)
-            : await _git.run(['diff', '--no-ext-diff', '-M', t.parentSha!, t.commitSha!, ...paths],
+            : await _git.run(['diff', '--no-ext-diff', '-M', ...ws, t.parentSha!, t.commitSha!, ...paths],
                 workingDirectory: path);
         return parseUnifiedDiff(t.path, out);
     }

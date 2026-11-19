@@ -19,13 +19,25 @@ class PullRequestBundle {
   final List<PullRequestFile> files;
   final List<PullRequestCheck> checks;
 
+  /// Comentarios en líneas concretas del diff (review comments).
+  final List<ReviewComment> reviewComments;
+
   const PullRequestBundle({
     required this.detail,
     required this.timeline,
     required this.commits,
     required this.files,
     required this.checks,
+    this.reviewComments = const [],
   });
+
+  /// Hilos (comentario raíz + respuestas, por fecha) de un fichero.
+  List<List<ReviewComment>> threadsFor(String path) {
+    final roots = reviewComments.where((c) => c.path == path && c.inReplyTo == null).toList();
+    return [
+      for (final root in roots) [root, ...reviewComments.where((c) => c.inReplyTo == root.id)],
+    ];
+  }
 
   CiStatus get ci {
     if (checks.isEmpty) return CiStatus.none;
@@ -110,7 +122,42 @@ class PullRequestEvent {
   /// null = comentario normal; si no, una review con ese resultado.
   final ReviewState? review;
 
-  const PullRequestEvent({required this.author, required this.body, this.date, this.review});
+  /// Para comentarios en el código: "lib/a.dart:12".
+  final String? location;
+
+  const PullRequestEvent({required this.author, required this.body, this.date, this.review, this.location});
+}
+
+enum DiffSide { left, right }
+
+/// Comentario en una línea del diff de la PR.
+class ReviewComment {
+  final int id;
+  final String author;
+  final String body;
+  final String path;
+
+  /// Línea en el fichero (null = el código cambió y el comentario quedó
+  /// "outdated").
+  final int? line;
+
+  /// left = versión base (líneas borradas), right = versión nueva.
+  final DiffSide side;
+  final DateTime? date;
+  final int? inReplyTo;
+
+  const ReviewComment({
+    required this.id,
+    required this.author,
+    required this.body,
+    required this.path,
+    required this.line,
+    required this.side,
+    this.date,
+    this.inReplyTo,
+  });
+
+  bool get isOutdated => line == null;
 }
 
 class PullRequestCommit {
@@ -190,4 +237,29 @@ class EditPullRequest extends PullRequestOp {
   final String title;
   final String body;
   const EditPullRequest(this.title, this.body);
+}
+
+/// Comentario nuevo en una línea del diff.
+class CommentOnLine extends PullRequestOp {
+  final String path;
+  final int line;
+  final DiffSide side;
+  final String body;
+
+  /// Commit sobre el que se comenta (el último de la PR).
+  final String commitSha;
+  const CommentOnLine({
+    required this.path,
+    required this.line,
+    required this.side,
+    required this.body,
+    required this.commitSha,
+  });
+}
+
+/// Respuesta en un hilo de comentarios de código.
+class ReplyToReviewComment extends PullRequestOp {
+  final int commentId;
+  final String body;
+  const ReplyToReviewComment(this.commentId, this.body);
 }

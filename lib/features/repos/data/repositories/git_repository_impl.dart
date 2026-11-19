@@ -75,8 +75,8 @@ class GitRepositoryImpl implements GitRepository {
       _guard(() => _cli.commitDetail(repo.path, sha));
 
   @override
-  Future<Result<FileDiff>> loadDiff(RepoHandle repo, DiffTarget target) =>
-      _guard(() => _cli.diff(repo.path, target));
+  Future<Result<FileDiff>> loadDiff(RepoHandle repo, DiffTarget target, {bool ignoreWhitespace = false}) =>
+      _guard(() => _cli.diff(repo.path, target, ignoreWhitespace: ignoreWhitespace));
 
   @override
   Future<Result<FileContent>> loadFileContent(RepoHandle repo, DiffTarget target) =>

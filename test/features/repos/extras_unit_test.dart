@@ -1,6 +1,12 @@
 import 'dart:io';
 
 import 'package:flutter_test/flutter_test.dart';
+import 'package:git_manager/features/repos/presentation/widgets/command_palette.dart';
+import 'package:git_manager/features/repos/domain/entities/git_action.dart';
+import 'package:git_manager/features/repos/domain/entities/file_diff.dart';
+import 'package:git_manager/features/repos/data/datasources/git_cli_data_source.dart';
+import 'package:git_manager/core/settings/app_settings.dart';
+import 'package:flutter/material.dart';
 import 'package:git_manager/core/git/git_runner.dart';
 import 'package:git_manager/core/system/signing_keys.dart';
 import 'package:git_manager/core/system/system_launcher.dart';
@@ -124,5 +130,64 @@ void main() {
       await global.writeAsString('[user]\n\tname = Me\n');
       expect(await keys.globalConfigBroken(), isFalse);
     });
+  });
+
+  group('notifications', () {
+    SystemLauncher l(String os, {bool notifySend = true, List<LaunchCommand>? started}) => SystemLauncher(
+          exists: (e) async => notifySend && e == 'notify-send',
+          start: (c) async => started?.add(c),
+          operatingSystem: os,
+          environment: const {},
+        );
+
+    test('Linux uses notify-send, or reports that there is none', () async {
+      final started = <LaunchCommand>[];
+      expect(await l('linux', started: started).notify('Push finished', 'app (main)'), isTrue);
+      expect(started.single.arguments, ['--app-name=Git Manager', '--icon=git', 'Push finished', 'app (main)']);
+      expect(await l('linux', notifySend: false).notify('a', 'b'), isFalse);
+    });
+
+    test('macOS and Windows escape quotes', () async {
+      final mac = (await l('macos').notificationCommand('Say "hi"', 'b'))!;
+      expect(mac.arguments.last, 'display notification "b" with title "Say \\"hi\\""');
+      final win = (await l('windows').notificationCommand("It's done", 'b'))!;
+      expect(win.arguments.last, contains("'It''s done'"));
+    });
+  });
+
+  test('palette fuzzy score', () {
+    expect(paletteScore('fetch', 'Fetch all remotes Repo'), 0);
+    expect(paletteScore('chk feat', 'Checkout feature/login Branches'), isNotNull);
+    expect(paletteScore('rebase main', 'Rebase dev onto main Branches'), 0);
+    expect(paletteScore('xyz', 'Fetch all remotes'), isNull);
+    expect(paletteScore('feat', 'Checkout feature/login')!, lessThan(paletteScore('ftr', 'Checkout feature/login')!));
+  });
+
+  test('settings survive a save/load round trip and clamp the font size', () {
+    const s = AppSettings(themeMode: ThemeMode.light, diffFontSize: 15, wrapLines: false, ignoreWhitespace: true);
+    final back = AppSettings.fromMap(s.toMap());
+    expect(back.themeMode, ThemeMode.light);
+    expect(back.diffFontSize, 15);
+    expect(back.wrapLines, isFalse);
+    expect(back.ignoreWhitespace, isTrue);
+    expect(s.copyWith(diffFontSize: 99).diffFontSize, AppSettings.maxFontSize);
+    expect(AppSettings.fromMap(const {}).themeMode, ThemeMode.system);
+  });
+
+  test('diff -w hides whitespace-only changes', () async {
+    final tmp = await Directory.systemTemp.createTemp('gm_ws_');
+    addTearDown(() => tmp.delete(recursive: true));
+    const runner = GitRunner();
+    const cli = GitCliDataSource(runner);
+    const id = GitIdentity(login: 'u', token: 't', name: 'U', email: 'u@e.com');
+    await runner.run(['init', '-q', '-b', 'main'], workingDirectory: tmp.path);
+    await File('${tmp.path}/a.txt').writeAsString('if (x) {\n  y();\n}\n');
+    await cli.run(tmp.path, const StageAllAction(), id);
+    await cli.run(tmp.path, const CommitAction('one'), id);
+    await File('${tmp.path}/a.txt').writeAsString('if (x) {\n      y();\n}\n'); // solo indentación
+
+    const t = DiffTarget(source: DiffSource.unstaged, path: 'a.txt');
+    expect((await cli.diff(tmp.path, t)).hunks, hasLength(1));
+    expect((await cli.diff(tmp.path, t, ignoreWhitespace: true)).hunks, isEmpty);
   });
 }

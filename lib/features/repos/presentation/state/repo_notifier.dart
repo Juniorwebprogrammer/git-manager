@@ -1,6 +1,9 @@
+import 'package:flutter/widgets.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:path/path.dart' as p;
 
 import '../../../../core/di/providers.dart';
+import '../../../../core/settings/app_settings.dart';
 import '../../../../core/error/app_failure.dart';
 import '../../../../core/error/result.dart';
 import '../../domain/entities/file_change.dart';
@@ -179,6 +182,11 @@ class RepoNotifier extends Notifier<RepoState> {
 
   @override
   RepoState build() {
+    // Al activar/desactivar "ignorar espacios", recargar el diff abierto.
+    ref.listen(appSettingsProvider.select((s) => s.ignoreWhitespace), (_, _) {
+      final open = state.openFile;
+      if (open != null) _loadDiff(open, keepContent: true, silent: true);
+    });
     Future.microtask(() => refresh(forceHistory: true));
     return const RepoState(isLoading: true);
   }
@@ -285,7 +293,7 @@ class RepoNotifier extends Notifier<RepoState> {
       fileContent: keepContent && sameFile ? state.fileContent : null,
     );
     final hadContent = state.fileContent != null;
-    final result = await _git.loadDiff(repo, target);
+    final result = await _git.loadDiff(repo, target, ignoreWhitespace: ref.read(appSettingsProvider).ignoreWhitespace);
     if (!ref.mounted || request != _diffRequest) return;
     state = switch (result) {
       Success(:final value) => state.copyWith(diff: value, diffLoading: false),
@@ -399,10 +407,41 @@ class RepoNotifier extends Notifier<RepoState> {
 
   static String _short(String rev) => RegExp(r'^[0-9a-f]{40}$').hasMatch(rev) ? rev.substring(0, 7) : rev;
 
+  /// Notificación del sistema al terminar una operación de red larga (o si
+  /// la ventana no está en primer plano).
+  Future<void> _maybeNotify(GitAction action, AppFailure? failure, Duration took) async {
+    if (!action.isNetwork || !ref.read(appSettingsProvider).notifications) return;
+    final lifecycle = WidgetsBinding.instance.lifecycleState;
+    final background = lifecycle != null && lifecycle != AppLifecycleState.resumed;
+    if (took < ref.read(notificationThresholdProvider) && !background) return;
+    final what = switch (action) {
+      PushAction(force: true) => 'Force push',
+      PushAction() => 'Push',
+      PullAction() => 'Pull',
+      FetchAction() => 'Fetch',
+      CheckoutPullRequestAction(:final number) => 'Checkout of PR #$number',
+      DeleteRemoteBranchAction() => 'Remote branch deletion',
+      PushTagAction() => 'Tag push',
+      _ => 'Git operation',
+    };
+    final where = '${p.basename(repo.path)}${state.snapshot?.currentBranch != null ? ' (${state.snapshot!.currentBranch})' : ''}';
+    await ref.read(systemLauncherProvider).notify(
+          failure == null ? '$what finished' : '$what failed',
+          failure == null ? where : '$where — ${failure.message.split('\n').first}',
+        );
+  }
+
   Future<AppFailure?> run(GitAction action, {bool keepRedo = false}) async {
     if (state.isBusy) return null;
     state = state.copyWith(busyLabel: action.label, redoStack: keepRedo ? null : const []);
+    final watch = Stopwatch()..start();
     final result = await _git.run(repo, action);
+    if (ref.mounted) {
+      await _maybeNotify(action, switch (result) {
+        Failure(:final failure) => failure,
+        Success() => null,
+      }, watch.elapsed);
+    }
     if (!ref.mounted) return null;
     state = state.copyWith(busyLabel: null);
 
@@ -465,3 +504,6 @@ final pullRequestBundleProvider =
     Failure(:final failure) => throw PullRequestsException(failure.message),
   };
 });
+
+/// Cuánto tiene que tardar una operación de red para avisar al terminar.
+final notificationThresholdProvider = Provider<Duration>((ref) => const Duration(seconds: 5));

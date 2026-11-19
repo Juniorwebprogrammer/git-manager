@@ -213,7 +213,22 @@ class GitHubRemoteDataSource {
       _getList('$base/pulls/$number/commits?per_page=100', token),
       _getList('$base/pulls/$number/files?per_page=100', token, maxPages: 3),
       fetchChecks(token, owner, name, detail.headSha),
+      _getList('$base/pulls/$number/comments?per_page=100', token, maxPages: 5),
     ]);
+
+    final reviewComments = [
+      for (final c in results[5] as List<Map<String, dynamic>>)
+        ReviewComment(
+          id: c['id'] as int,
+          author: _login(c['user']),
+          body: c['body'] as String? ?? '',
+          path: c['path'] as String? ?? '',
+          line: c['line'] as int?,
+          side: c['side'] == 'LEFT' ? DiffSide.left : DiffSide.right,
+          date: DateTime.tryParse(c['created_at'] as String? ?? ''),
+          inReplyTo: c['in_reply_to_id'] as int?,
+        ),
+    ];
 
     final timeline = <PullRequestEvent>[
       for (final c in results[0] as List<Map<String, dynamic>>)
@@ -235,6 +250,14 @@ class GitHubRemoteDataSource {
               _ => ReviewState.commented,
             },
           ),
+      // Hilos de código (solo el comentario que los abre) en la conversación.
+      for (final c in reviewComments.where((c) => c.inReplyTo == null))
+        PullRequestEvent(
+          author: c.author,
+          body: c.body,
+          date: c.date,
+          location: c.isOutdated ? '${c.path} (outdated)' : '${c.path}:${c.line}',
+        ),
     ]..sort((a, b) => (a.date ?? DateTime(0)).compareTo(b.date ?? DateTime(0)));
 
     return PullRequestBundle(
@@ -269,6 +292,7 @@ class GitHubRemoteDataSource {
           ),
       ],
       checks: results[4] as List<PullRequestCheck>,
+      reviewComments: reviewComments,
     );
   }
 
@@ -335,6 +359,16 @@ class GitHubRemoteDataSource {
         if (detail != null && !detail.isFromFork) {
           await _send('DELETE', '$base/git/refs/heads/${detail.headRef}', token);
         }
+      case CommentOnLine(:final path, :final line, :final side, :final body, :final commitSha):
+        await _send('POST', '$base/pulls/$number/comments', token, body: {
+          'body': body,
+          'commit_id': commitSha,
+          'path': path,
+          'line': line,
+          'side': side == DiffSide.left ? 'LEFT' : 'RIGHT',
+        });
+      case ReplyToReviewComment(:final commentId, :final body):
+        await _send('POST', '$base/pulls/$number/comments/$commentId/replies', token, body: {'body': body});
       case SetPullRequestOpen(:final open):
         await _send('PATCH', '$base/pulls/$number', token, body: {'state': open ? 'open' : 'closed'});
       case EditPullRequest(:final title, :final body):

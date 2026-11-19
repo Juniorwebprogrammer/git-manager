@@ -141,6 +141,41 @@ class SystemLauncher {
     }
   }
 
+  /// Comando para mostrar una notificación del sistema (null = no hay forma).
+  Future<LaunchCommand?> notificationCommand(String title, String body) async {
+    switch (_os) {
+      case 'linux':
+        if (!await _exists('notify-send')) return null;
+        return LaunchCommand('notify-send', ['--app-name=Git Manager', '--icon=git', title, body]);
+      case 'macos':
+        String q(String s) => s.replaceAll('\\', '\\\\').replaceAll('"', '\\"');
+        return LaunchCommand('osascript', ['-e', 'display notification "${q(body)}" with title "${q(title)}"']);
+      case 'windows':
+        String q(String s) => s.replaceAll("'", "''");
+        return LaunchCommand('powershell', [
+          '-NoProfile',
+          '-WindowStyle',
+          'Hidden',
+          '-Command',
+          'Add-Type -AssemblyName System.Windows.Forms; '
+              r'$n = New-Object System.Windows.Forms.NotifyIcon; '
+              r'$n.Icon = [System.Drawing.SystemIcons]::Information; $n.Visible = $true; '
+              "\$n.ShowBalloonTip(5000, '${q(title)}', '${q(body)}', [System.Windows.Forms.ToolTipIcon]::Info); "
+              r'Start-Sleep -Seconds 6; $n.Dispose()',
+        ]);
+      default:
+        return null;
+    }
+  }
+
+  /// Muestra una notificación del sistema. false si no se pudo.
+  Future<bool> notify(String title, String body) async {
+    final command = await notificationCommand(title, body);
+    if (command == null) return false;
+    await _start(command);
+    return true;
+  }
+
   /// Abre una terminal en [dir]. false si no se encontró ninguna.
   Future<bool> openTerminal(String dir) async {
     final command = await terminalCommand(dir);

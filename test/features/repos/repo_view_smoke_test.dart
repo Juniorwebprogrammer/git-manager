@@ -158,6 +158,11 @@ void main() {
         'commit detail and diffs render without layout errors', (tester) async {
       await pumpWorkspace(tester, size);
 
+      // Los botones de la toolbar (de Pull a Folder) van centrados.
+      final toolsLeft = tester.getTopLeft(find.byTooltip('Pull (fast-forward or merge)')).dx;
+      final toolsRight = tester.getTopRight(find.byTooltip('Open folder')).dx;
+      expect(((toolsLeft + toolsRight) / 2 - size.width / 2).abs(), lessThan(4), reason: 'toolbar not centered');
+
       // Grafo con commits, refs y WIP.
       expect(find.text('Improve greeting'), findsOneWidget);
       expect(find.text('Add login screen'), findsOneWidget);

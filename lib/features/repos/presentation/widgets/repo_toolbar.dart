@@ -66,18 +66,24 @@ class RepoToolbar extends ConsumerWidget {
               height: compact ? 46 : 56,
               child: Row(
                 children: [
-                  const SizedBox(width: 4),
-                  IconButton(
-                    tooltip: sidebarVisible ? 'Hide sidebar' : 'Show sidebar',
-                    onPressed: onToggleSidebar,
-                    icon: Icon(sidebarVisible ? Icons.view_sidebar : Icons.view_sidebar_outlined, size: 20),
-                  ),
-                  if (showRepo)
-                    Flexible(
-                      flex: 3,
-                      child: _RepoAndBranch(repo: repo, snapshot: snapshot, busy: busy, onNewBranch: newBranch),
+                  // Izquierda y derecha tienen el mismo flex: los botones
+                  // quedan siempre centrados en la barra.
+                  Expanded(
+                    child: Row(
+                      children: [
+                        const SizedBox(width: 4),
+                        IconButton(
+                          tooltip: sidebarVisible ? 'Hide sidebar' : 'Show sidebar',
+                          onPressed: onToggleSidebar,
+                          icon: Icon(sidebarVisible ? Icons.view_sidebar : Icons.view_sidebar_outlined, size: 20),
+                        ),
+                        if (showRepo)
+                          Flexible(
+                            child: _RepoAndBranch(repo: repo, snapshot: snapshot, busy: busy, onNewBranch: newBranch),
+                          ),
+                      ],
                     ),
-                  const Spacer(),
+                  ),
                   _ToolButton(
                     icon: Icons.cloud_download_outlined,
                     label: 'Pull',
@@ -152,21 +158,20 @@ class RepoToolbar extends ConsumerWidget {
                     compact: compact,
                     onPressed: () => launchUrl(Uri.file(repo.path)),
                   ),
-                  const Spacer(),
-                  if (busy && !compact)
-                    Flexible(
-                      flex: 2,
-                      child: Padding(
-                        padding: const EdgeInsets.only(right: 12),
-                        child: Text(
-                          state.busyLabel!,
-                          textAlign: TextAlign.end,
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                          style: theme.textTheme.bodySmall?.copyWith(color: theme.colorScheme.primary),
-                        ),
-                      ),
-                    ),
+                  Expanded(
+                    child: busy && !compact
+                        ? Padding(
+                            padding: const EdgeInsets.only(left: 12, right: 12),
+                            child: Text(
+                              state.busyLabel!,
+                              textAlign: TextAlign.end,
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: theme.textTheme.bodySmall?.copyWith(color: theme.colorScheme.primary),
+                            ),
+                          )
+                        : const SizedBox.shrink(),
+                  ),
                 ],
               ),
             ),

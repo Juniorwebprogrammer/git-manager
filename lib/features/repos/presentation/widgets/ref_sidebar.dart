@@ -378,12 +378,17 @@ class _RefTile extends ConsumerWidget {
     final theme = Theme.of(context);
     final currentBranch = ref.watch(repoNotifierProvider(repo).select((s) => s.snapshot?.currentBranch));
     final isCurrent = gitRef.kind == RefKind.local && gitRef.name == currentBranch;
+    final fresh = ref.watch(repoNotifierProvider(repo).select((s) => s.freshRefs[gitRef.name]));
     final worktree = gitRef.kind == RefKind.local
         ? ref.watch(repoNotifierProvider(repo).select((s) => s.snapshot?.worktreeBranches[gitRef.name]))
         : null;
 
     final Widget base = InkWell(
-      onTap: () => ref.read(repoNotifierProvider(repo).notifier).selectCommit(gitRef.sha),
+      onTap: () {
+        final notifier = ref.read(repoNotifierProvider(repo).notifier);
+        notifier.markRefSeen(gitRef.name);
+        notifier.selectCommit(gitRef.sha);
+      },
       onDoubleTap: isCurrent
           ? null
           : worktree != null
@@ -429,6 +434,17 @@ class _RefTile extends ConsumerWidget {
               Tooltip(
                 message: 'Upstream deleted',
                 child: Icon(Icons.link_off, size: 14, color: theme.colorScheme.error),
+              ),
+            if (fresh != null)
+              Tooltip(
+                message: fresh == 0 ? 'New branch on the remote' : '$fresh new commit${fresh == 1 ? '' : 's'} since you last looked',
+                child: Container(
+                  margin: const EdgeInsets.only(left: 4),
+                  padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 1),
+                  decoration: BoxDecoration(color: theme.colorScheme.primary, borderRadius: BorderRadius.circular(8)),
+                  child: Text(fresh == 0 ? 'new' : '+$fresh',
+                      style: theme.textTheme.labelSmall?.copyWith(color: theme.colorScheme.onPrimary)),
+                ),
               ),
             if (gitRef.ahead > 0) _CountBadge('↑${gitRef.ahead}'),
             if (gitRef.behind > 0) _CountBadge('↓${gitRef.behind}'),

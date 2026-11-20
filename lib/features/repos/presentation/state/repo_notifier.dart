@@ -1,3 +1,4 @@
+import 'package:clock/clock.dart';
 import 'package:flutter/widgets.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:path/path.dart' as p;
@@ -84,6 +85,21 @@ class RepoState {
   /// Pull Request abierta en el panel central.
   final int? pullRequestNumber;
 
+  /// Último fetch (manual o automático) y su error, si falló.
+  final DateTime? lastFetchAt;
+  final String? fetchError;
+
+  /// Hay un auto-fetch en curso (no bloquea la toolbar).
+  final bool autoFetching;
+
+  /// Lo que trajo el último fetch; [remoteUpdatesVersion] cambia en cada
+  /// fetch con novedades para que la UI muestre el aviso una sola vez.
+  final List<RemoteUpdate> remoteUpdates;
+  final int remoteUpdatesVersion;
+
+  /// Ramas remotas con novedades sin mirar (ref → commits nuevos; 0 = rama nueva).
+  final Map<String, int> freshRefs;
+
   const RepoState({
     this.snapshot,
     this.commits = const [],
@@ -106,6 +122,12 @@ class RepoState {
     this.blame,
     this.compare,
     this.pullRequestNumber,
+    this.lastFetchAt,
+    this.fetchError,
+    this.autoFetching = false,
+    this.remoteUpdates = const [],
+    this.remoteUpdatesVersion = 0,
+    this.freshRefs = const {},
   });
 
   bool get isBusy => busyLabel != null;
@@ -135,6 +157,12 @@ class RepoState {
     Object? blame = _unset,
     Object? compare = _unset,
     Object? pullRequestNumber = _unset,
+    Object? lastFetchAt = _unset,
+    Object? fetchError = _unset,
+    bool? autoFetching,
+    List<RemoteUpdate>? remoteUpdates,
+    int? remoteUpdatesVersion,
+    Map<String, int>? freshRefs,
   }) {
     T pick<T>(Object? value, T current) => identical(value, _unset) ? current : value as T;
     return RepoState(
@@ -159,6 +187,12 @@ class RepoState {
       blame: pick(blame, this.blame),
       compare: pick(compare, this.compare),
       pullRequestNumber: pick(pullRequestNumber, this.pullRequestNumber),
+      lastFetchAt: pick(lastFetchAt, this.lastFetchAt),
+      fetchError: pick(fetchError, this.fetchError),
+      autoFetching: autoFetching ?? this.autoFetching,
+      remoteUpdates: remoteUpdates ?? this.remoteUpdates,
+      remoteUpdatesVersion: remoteUpdatesVersion ?? this.remoteUpdatesVersion,
+      freshRefs: freshRefs ?? this.freshRefs,
     );
   }
 }
@@ -211,26 +245,38 @@ class RepoNotifier extends Notifier<RepoState> {
       };
       if (snapshot == null) return;
 
-      var next = state.copyWith(snapshot: snapshot, isLoading: false, loadError: null);
+      // Se recogen los resultados y se aplican al final sobre el estado
+      // VIGENTE: durante los await pueden haber cambiado otras cosas (un
+      // fichero abierto, las novedades de un auto-fetch…) que no hay que pisar.
+      List<GitCommit>? commits;
       final signature = snapshot.refsSignature;
       if (forceHistory || signature != _refsSignature) {
         final history = await _git.loadHistory(repo, limit: state.historyLimit);
         if (!ref.mounted) return;
         if (history case Success(:final value)) {
           _refsSignature = signature;
-          next = next.copyWith(commits: value, graph: buildCommitGraph(value));
-          final selected = next.selectedSha;
-          if (selected != null && !value.any((c) => c.sha == selected)) {
-            next = next.copyWith(selectedSha: null, detail: null);
-          }
+          commits = value;
         }
       }
       final undo = await _git.loadUndoPlan(repo);
       if (!ref.mounted) return;
-      next = next.copyWith(undoPlan: switch (undo) {
-        Success(:final value) => value,
-        Failure() => null,
-      });
+
+      var next = state.copyWith(
+        snapshot: snapshot,
+        isLoading: false,
+        loadError: null,
+        undoPlan: switch (undo) {
+          Success(:final value) => value,
+          Failure() => null,
+        },
+      );
+      if (commits != null) {
+        next = next.copyWith(commits: commits, graph: buildCommitGraph(commits));
+        final selected = next.selectedSha;
+        if (selected != null && !commits.any((c) => c.sha == selected)) {
+          next = next.copyWith(selectedSha: null, detail: null);
+        }
+      }
       state = next;
 
       // Si el diff abierto es de cambios locales, puede haber cambiado... o
@@ -431,11 +477,127 @@ class RepoNotifier extends Notifier<RepoState> {
         );
   }
 
+  static Map<String, String> _remoteShas(RepoSnapshot? snapshot) => {
+        for (final r in snapshot?.remoteBranches ?? const <GitRef>[]) r.name: r.sha,
+      };
+
+  bool _autoFetchRunning = false;
+
+  /// Llamado periódicamente (y al volver a la ventana): hace fetch en
+  /// segundo plano si toca según el ajuste "Auto-fetch".
+  Future<void> maybeAutoFetch({bool onFocus = false}) async {
+    final minutes = ref.read(appSettingsProvider).autoFetchMinutes;
+    final snapshot = state.snapshot;
+    if (minutes <= 0 || snapshot == null || snapshot.remotes.isEmpty) return;
+    if (state.isBusy || _autoFetchRunning || snapshot.pendingOperation != PendingOperation.none) return;
+    var interval = Duration(minutes: minutes);
+    // Al volver a la app, basta con que haya pasado un minuto.
+    if (onFocus && interval > const Duration(minutes: 1)) interval = const Duration(minutes: 1);
+    final last = state.lastFetchAt;
+    if (last != null && clock.now().difference(last) < interval) return;
+    await backgroundFetch();
+  }
+
+  /// Fetch silencioso: no bloquea la toolbar ni muestra errores en un
+  /// diálogo (quedan en [RepoState.fetchError]).
+  Future<void> backgroundFetch() async {
+    if (_autoFetchRunning || state.isBusy) return;
+    _autoFetchRunning = true;
+    final before = _remoteShas(state.snapshot);
+    state = state.copyWith(autoFetching: true);
+    try {
+      final result = await _git.run(repo, const FetchAction(background: true));
+      if (!ref.mounted) return;
+      switch (result) {
+        case Failure(:final failure):
+          state = state.copyWith(
+            autoFetching: false,
+            lastFetchAt: clock.now(),
+            fetchError: failure.message.split('\n').first,
+          );
+        case Success():
+          state = state.copyWith(autoFetching: false, lastFetchAt: clock.now(), fetchError: null);
+          await _reportRemoteUpdates(before, notify: true);
+          await refresh(forceHistory: true);
+      }
+    } finally {
+      _autoFetchRunning = false;
+      if (ref.mounted && state.autoFetching) state = state.copyWith(autoFetching: false);
+    }
+  }
+
+  /// Compara las ramas remotas con [before] y publica lo que cambió.
+  Future<void> _reportRemoteUpdates(Map<String, String> before, {required bool notify}) async {
+    final snap = await _git.loadSnapshot(repo);
+    if (!ref.mounted || snap is! Success<RepoSnapshot>) return;
+    final after = _remoteShas(snap.value);
+    final updates = <RemoteUpdate>[];
+    for (final e in after.entries) {
+      final old = before[e.key];
+      if (old == e.value) continue;
+      final info = await _git.loadRefUpdate(repo, old, e.value);
+      final (commits, author) = switch (info) {
+        Success(:final value) => (value.commits, value.author),
+        Failure() => (0, ''),
+      };
+      updates.add(RemoteUpdate(
+        ref: e.key,
+        kind: old == null ? RemoteUpdateKind.newBranch : RemoteUpdateKind.updated,
+        commits: commits,
+        author: author,
+        sha: e.value,
+      ));
+    }
+    for (final gone in before.keys.where((k) => !after.containsKey(k))) {
+      updates.add(RemoteUpdate(ref: gone, kind: RemoteUpdateKind.deleted));
+    }
+    if (!ref.mounted || updates.isEmpty) return;
+
+    final fresh = {...state.freshRefs};
+    for (final u in updates) {
+      if (u.kind == RemoteUpdateKind.deleted) {
+        fresh.remove(u.ref);
+      } else {
+        fresh[u.ref] = u.kind == RemoteUpdateKind.newBranch ? 0 : (fresh[u.ref] ?? 0) + u.commits;
+      }
+    }
+    state = state.copyWith(
+      remoteUpdates: updates,
+      remoteUpdatesVersion: state.remoteUpdatesVersion + 1,
+      freshRefs: fresh,
+    );
+
+    // Con la ventana en segundo plano, también notificación del sistema.
+    final lifecycle = WidgetsBinding.instance.lifecycleState;
+    final background = lifecycle != null && lifecycle != AppLifecycleState.resumed;
+    if (notify && background && ref.read(appSettingsProvider).notifications) {
+      await ref.read(systemLauncherProvider).notify(
+            'New changes in ${p.basename(repo.path)}',
+            updates.take(3).map((u) => u.summary).join('\n'),
+          );
+    }
+  }
+
+  /// El usuario ya ha visto las novedades de [refName].
+  void markRefSeen(String refName) {
+    if (!state.freshRefs.containsKey(refName)) return;
+    state = state.copyWith(freshRefs: {...state.freshRefs}..remove(refName));
+  }
+
   Future<AppFailure?> run(GitAction action, {bool keepRedo = false}) async {
     if (state.isBusy) return null;
     state = state.copyWith(busyLabel: action.label, redoStack: keepRedo ? null : const []);
     final watch = Stopwatch()..start();
+    final fetches = action is FetchAction || action is PullAction;
+    final before = fetches ? _remoteShas(state.snapshot) : null;
     final result = await _git.run(repo, action);
+    if (fetches && ref.mounted) {
+      state = switch (result) {
+        Success() => state.copyWith(lastFetchAt: clock.now(), fetchError: null),
+        Failure() => state,
+      };
+      if (result is Success && before != null) await _reportRemoteUpdates(before, notify: false);
+    }
     if (ref.mounted) {
       await _maybeNotify(action, switch (result) {
         Failure(:final failure) => failure,

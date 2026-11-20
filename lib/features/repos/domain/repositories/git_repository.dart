@@ -35,6 +35,10 @@ abstract interface class GitRepository {
   /// preparar un rebase interactivo.
   Future<Result<List<GitCommit>>> loadCommitsForRebase(RepoHandle repo, String base);
 
+  /// Commits de `from..to` (from null = toda la historia de [to]) y autor
+  /// del último, para describir lo que trajo un fetch.
+  Future<Result<({int commits, String author})>> loadRefUpdate(RepoHandle repo, String? from, String to);
+
   /// Qué deshacería "Undo" ahora (null si no hay nada que deshacer).
   Future<Result<UndoPlan?>> loadUndoPlan(RepoHandle repo);
 

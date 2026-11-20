@@ -225,6 +225,13 @@ class GitCliDataSource {
     Future<String> git(List<String> args) => _git.run(args, workingDirectory: path, identity: identity);
 
     switch (action) {
+      case FetchAction(background: true):
+        // Sin preguntas: si la clave SSH pide passphrase, que falle en
+        // silencio en vez de abrir una ventana cada pocos minutos.
+        await _git.run(['fetch', '--all', '--prune', '--quiet'],
+            workingDirectory: path,
+            identity: identity,
+            extraEnvironment: const {'GIT_SSH_COMMAND': 'ssh -o BatchMode=yes', 'SSH_ASKPASS_REQUIRE': 'never'});
       case FetchAction():
         await git(['fetch', '--all', '--prune']);
       case PullAction(rebase: true):
@@ -555,6 +562,16 @@ class GitCliDataSource {
     if (!await f.exists()) return null;
     final text = cleanCommitTemplate(await f.readAsString());
     return text.isEmpty ? null : text;
+  }
+
+  /// Cuántos commits hay en `from..to` y quién hizo el último de [to].
+  Future<({int commits, String author})> refUpdate(String path, String? from, String to) async {
+    final count = await _git.tryRun(['rev-list', '--count', if (from == null) to else '$from..$to'], workingDirectory: path);
+    final author = await _git.tryRun(['log', '-1', '--format=%an', to], workingDirectory: path);
+    return (
+      commits: int.tryParse(count.stdout.trim()) ?? 0,
+      author: author.ok ? author.stdout.trim() : '',
+    );
   }
 
   Future<String> remoteUrl(String path) async {

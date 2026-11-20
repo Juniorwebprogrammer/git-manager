@@ -42,11 +42,19 @@ class _RepoViewState extends ConsumerState<RepoView> {
   double _panelWidth = 380;
   bool _sidebarVisible = true;
 
+  late final AppLifecycleListener _lifecycle;
+
   @override
   void initState() {
     super.initState();
     WidgetsBinding.instance.addPostFrameCallback((_) => _reclaimFocus());
     _syncTimer();
+    // Al volver a la ventana: mirar si hay novedades en el remoto.
+    _lifecycle = AppLifecycleListener(onResume: () {
+      if (mounted && widget.active) {
+        ref.read(repoNotifierProvider(widget.repo).notifier).maybeAutoFetch(onFocus: true);
+      }
+    });
   }
 
   @override
@@ -54,7 +62,8 @@ class _RepoViewState extends ConsumerState<RepoView> {
     super.didUpdateWidget(old);
     if (widget.active && !old.active) {
       WidgetsBinding.instance.addPostFrameCallback((_) => _reclaimFocus());
-      ref.read(repoNotifierProvider(widget.repo).notifier).refresh();
+      final notifier = ref.read(repoNotifierProvider(widget.repo).notifier);
+      notifier.refresh().then((_) => notifier.maybeAutoFetch(onFocus: true));
     }
     _syncTimer();
   }
@@ -63,7 +72,10 @@ class _RepoViewState extends ConsumerState<RepoView> {
     if (widget.active) {
       _timer ??= Timer.periodic(_pollInterval, (_) {
         final state = ref.read(repoNotifierProvider(widget.repo));
-        if (!state.isBusy) ref.read(repoNotifierProvider(widget.repo).notifier).refresh();
+        if (state.isBusy) return;
+        final notifier = ref.read(repoNotifierProvider(widget.repo).notifier);
+        // Estado local cada pocos segundos; fetch del remoto según el ajuste.
+        notifier.refresh().then((_) => notifier.maybeAutoFetch());
       });
     } else {
       _timer?.cancel();
@@ -84,6 +96,7 @@ class _RepoViewState extends ConsumerState<RepoView> {
 
   @override
   void dispose() {
+    _lifecycle.dispose();
     _focus.dispose();
     _timer?.cancel();
     super.dispose();
@@ -98,6 +111,35 @@ class _RepoViewState extends ConsumerState<RepoView> {
     final blame = ref.watch(provider.select((s) => s.blame));
     final comparing = ref.watch(provider.select((s) => s.compare != null));
     final pullRequest = ref.watch(provider.select((s) => s.pullRequestNumber));
+
+    // Novedades del remoto (un compañero hizo push): aviso con "Show".
+    ref.listen(provider.select((s) => s.remoteUpdatesVersion), (_, _) {
+      final updates = ref.read(provider).remoteUpdates;
+      if (!widget.active || updates.isEmpty) return;
+      final first = updates.firstWhere((u) => u.sha.isNotEmpty, orElse: () => updates.first);
+      final more = updates.length > 2 ? ' · +${updates.length - 2} more' : '';
+      ScaffoldMessenger.of(context)
+        ..hideCurrentSnackBar()
+        ..showSnackBar(SnackBar(
+          duration: const Duration(seconds: 6),
+          content: Row(children: [
+            const Icon(Icons.cloud_download_outlined, size: 18, color: Colors.white70),
+            const SizedBox(width: 10),
+            Expanded(child: Text(updates.take(2).map((u) => u.summary).join(' · ') + more)),
+          ]),
+          action: first.sha.isEmpty
+              ? null
+              : SnackBarAction(
+                  label: 'Show',
+                  onPressed: () {
+                    final notifier = ref.read(provider.notifier);
+                    notifier.closeTopmost();
+                    notifier.markRefSeen(first.ref);
+                    notifier.selectCommit(first.sha);
+                  },
+                ),
+        ));
+    });
 
     // Al cerrar un diff/historial, el widget con el foco desaparece y el
     // foco queda en el ámbito superior, fuera de los atajos (Esc, F5) de

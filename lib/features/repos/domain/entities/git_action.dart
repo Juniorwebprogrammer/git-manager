@@ -23,7 +23,10 @@ sealed class GitAction {
 }
 
 class FetchAction extends GitAction {
-  const FetchAction();
+  /// Auto-fetch en segundo plano: nunca debe pedir nada interactivo
+  /// (p. ej. la passphrase de una clave SSH).
+  final bool background;
+  const FetchAction({this.background = false});
   @override
   String get label => 'Fetching…';
   @override

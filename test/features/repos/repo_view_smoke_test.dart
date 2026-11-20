@@ -77,6 +77,9 @@ class _CliGitRepository implements GitRepository {
   @override
   Future<Result<void>> run(RepoHandle repo, GitAction action) => _wrap(() => cli.run(repo.path, action, identity));
   @override
+  Future<Result<({int commits, String author})>> loadRefUpdate(RepoHandle repo, String? from, String to) =>
+      _wrap(() => cli.refUpdate(repo.path, from, to));
+  @override
   Future<Result<UndoPlan?>> loadUndoPlan(RepoHandle repo) => _wrap(() => cli.undoPlan(repo.path));
   @override
   Future<Result<List<FileHistoryEntry>>> loadFileHistory(RepoHandle repo, String path) =>
@@ -564,6 +567,111 @@ void main() {
         launched.map((c) => c.toString()),
         contains('notify-send --app-name=Git Manager --icon=git Fetch finished demo (main)'),
       );
+    });
+  });
+
+  group('auto-fetch', () {
+    late String teammate;
+    const ana = GitIdentity(login: 'ana', token: 't', name: 'Ana', email: 'ana@example.com');
+
+    setUp(() async {
+      final bare = '${tmp.path}/origin.git';
+      await runner.run(['init', '-q', '--bare', '-b', 'main', bare], workingDirectory: tmp.path);
+      await runner.run(['remote', 'add', 'origin', bare], workingDirectory: repo);
+      await runner.run(['push', '-q', '-u', 'origin', 'main'], workingDirectory: repo);
+      final parent = await Directory('${tmp.path}/ana').create();
+      teammate = await git.cli.clone(bare, parent.path, ana);
+    });
+
+    Future<void> anaPushes() async {
+      final cli = git.cli;
+      await cli.run(teammate, const CreateBranchAction('feature/payments'), ana);
+      await File('$teammate/pay.dart').writeAsString('// pay\n');
+      await cli.run(teammate, const StageAllAction(), ana);
+      await cli.run(teammate, const CommitAction('Add payments'), ana);
+      await cli.run(teammate, const PushAction(), ana);
+      await cli.run(teammate, const CheckoutAction('main'), ana);
+      await File('$teammate/README.md').writeAsString('hello\n');
+      await cli.run(teammate, const StageAllAction(), ana);
+      await cli.run(teammate, const CommitAction('Add readme'), ana);
+      await cli.run(teammate, const PushAction(), ana);
+    }
+
+    testWidgets("a teammate's push shows up in the graph by itself", (tester) async {
+      await pumpWorkspace(tester, const Size(1280, 720));
+      // Primer tick: fetch inicial (no hay nada nuevo todavía).
+      await tester.pump(const Duration(seconds: 6));
+      await settle(tester);
+      await settle(tester);
+      expect(find.textContaining('Fetched'), findsOneWidget);
+      expect(find.text('Add payments'), findsNothing);
+
+      await tester.runAsync(anaPushes);
+
+      // Pasan 5 minutos: el auto-fetch se dispara solo.
+      await tester.pump(const Duration(minutes: 5, seconds: 6));
+      for (var i = 0; i < 4; i++) {
+        await settle(tester);
+      }
+
+      expect(find.text('Add payments'), findsOneWidget); // en el árbol
+      expect(find.text('Add readme'), findsOneWidget);
+      expect(find.textContaining('new branch origin/feature/payments by Ana'), findsOneWidget); // aviso
+      expect(find.textContaining('origin/main: 1 new commit by Ana'), findsOneWidget);
+      expect(find.text('new'), findsOneWidget); // marca en la barra lateral
+      expect(find.byTooltip('1 new commit since you last looked'), findsOneWidget);
+      expect(find.text('1'), findsWidgets); // ↓1 en Pull
+
+      // Regresión: un refresco posterior no debe borrar las marcas de novedad
+      // (refresh() pisaba el estado que cambiaba mientras esperaba a git).
+      await tester.pump(const Duration(seconds: 6));
+      await settle(tester);
+      expect(find.text('new'), findsOneWidget);
+      expect(find.byTooltip('1 new commit since you last looked'), findsOneWidget);
+
+      // "Show" salta al commit nuevo.
+      await tester.tap(find.text('Show'));
+      await settle(tester);
+      expect(find.byType(CommitDetailPanel), findsOneWidget);
+
+      // Con la ventana en segundo plano, también notificación del sistema.
+      tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.inactive);
+      await tester.runAsync(() async {
+        await File('$teammate/README.md').writeAsString('hello again\n');
+        await git.cli.run(teammate, const StageAllAction(), ana);
+        await git.cli.run(teammate, const CommitAction('Update readme'), ana);
+        await git.cli.run(teammate, const PushAction(), ana);
+      });
+      final container = ProviderScope.containerOf(tester.element(find.byType(WorkspacePage)));
+      unawaited(container.read(repoNotifierProvider((accountId: 'a', path: repo)).notifier).backgroundFetch());
+      for (var i = 0; i < 3; i++) {
+        await settle(tester);
+      }
+      expect(
+        launched.map((c) => c.toString()),
+        contains('notify-send --app-name=Git Manager --icon=git New changes in demo origin/main: 1 new commit by Ana'),
+      );
+      tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.resumed);
+      await settle(tester);
+      expect(tester.takeException(), isNull);
+    });
+
+    testWidgets('auto-fetch can be turned off in Settings', (tester) async {
+      await pumpWorkspace(tester, const Size(1280, 720));
+      await tester.tap(find.byTooltip('Settings'));
+      await settle(tester);
+      expect(find.text('Every 5 min'), findsOneWidget);
+      await tester.tap(find.text('Every 5 min'));
+      await settle(tester);
+      await tester.tap(find.text('Off').last);
+      await settle(tester);
+      await tester.tap(find.text('Done'));
+      await settle(tester);
+
+      await tester.pump(const Duration(seconds: 6));
+      await settle(tester);
+      expect(find.text('Not fetched yet'), findsOneWidget);
+      expect(tester.takeException(), isNull);
     });
   });
 

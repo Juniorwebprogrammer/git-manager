@@ -88,6 +88,10 @@ class GitRepositoryImpl implements GitRepository {
       });
 
   @override
+  Future<Result<({int commits, String author})>> loadRefUpdate(RepoHandle repo, String? from, String to) =>
+      _guard(() => _cli.refUpdate(repo.path, from, to));
+
+  @override
   Future<Result<UndoPlan?>> loadUndoPlan(RepoHandle repo) => _guard(() => _cli.undoPlan(repo.path));
 
   @override

@@ -1,3 +1,6 @@
+import 'dart:async';
+
+import 'package:clock/clock.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:path/path.dart' as p;
@@ -7,6 +10,7 @@ import '../../domain/entities/git_action.dart';
 import '../../domain/entities/repo_snapshot.dart';
 import '../../domain/repositories/git_repository.dart';
 import '../../../../core/di/providers.dart';
+import '../../../../core/settings/app_settings.dart';
 import '../state/repo_notifier.dart';
 import 'pull_request_dialog.dart';
 import 'ui_helpers.dart';
@@ -237,7 +241,13 @@ class RepoToolbar extends ConsumerWidget {
                               style: theme.textTheme.bodySmall?.copyWith(color: theme.colorScheme.primary),
                             ),
                           )
-                        : const SizedBox.shrink(),
+                        : Align(
+                            alignment: Alignment.centerRight,
+                            child: Padding(
+                              padding: const EdgeInsets.only(right: 10),
+                              child: _RemoteStatus(repo: repo, compact: compact),
+                            ),
+                          ),
                   ),
                 ],
               ),
@@ -333,6 +343,109 @@ class _RepoAndBranch extends ConsumerWidget {
               ],
             ),
           ],
+        ),
+      ),
+    );
+  }
+}
+
+/// Estado del remoto: "Fetched 2 min ago", comprobando, o error del
+/// auto-fetch. Clic = mirar ahora.
+class _RemoteStatus extends ConsumerStatefulWidget {
+  final RepoHandle repo;
+  final bool compact;
+
+  const _RemoteStatus({required this.repo, required this.compact});
+
+  @override
+  ConsumerState<_RemoteStatus> createState() => _RemoteStatusState();
+}
+
+class _RemoteStatusState extends ConsumerState<_RemoteStatus> {
+  Timer? _tick;
+
+  @override
+  void initState() {
+    super.initState();
+    // Para que "hace N min" se mantenga al día.
+    _tick = Timer.periodic(const Duration(seconds: 30), (_) {
+      if (mounted) setState(() {});
+    });
+  }
+
+  @override
+  void dispose() {
+    _tick?.cancel();
+    super.dispose();
+  }
+
+  static String ago(Duration d) {
+    if (d.inSeconds < 45) return 'just now';
+    if (d.inMinutes < 60) return '${d.inMinutes < 1 ? 1 : d.inMinutes} min ago';
+    if (d.inHours < 24) return '${d.inHours} h ago';
+    return '${d.inDays} d ago';
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final state = ref.watch(repoNotifierProvider(widget.repo));
+    final minutes = ref.watch(appSettingsProvider.select((s) => s.autoFetchMinutes));
+    if (state.snapshot?.remotes.isEmpty ?? true) return const SizedBox.shrink();
+
+    final faded = theme.textTheme.labelSmall?.copyWith(color: theme.colorScheme.onSurfaceVariant);
+    final auto = minutes > 0 ? 'Auto-fetch every $minutes min' : 'Auto-fetch is off (Settings)';
+    final (Widget icon, String text, String tooltip) = switch (state) {
+      RepoState(autoFetching: true) => (
+          const SizedBox(width: 12, height: 12, child: CircularProgressIndicator(strokeWidth: 1.6)),
+          'Checking remote…',
+          auto,
+        ),
+      RepoState(:final fetchError?) => (
+          Icon(Icons.cloud_off_outlined, size: 15, color: theme.colorScheme.error),
+          'Fetch failed',
+          '$fetchError\n\nClick to fetch now and see the full error.',
+        ),
+      RepoState(:final lastFetchAt?) => (
+          Icon(Icons.cloud_done_outlined, size: 15, color: theme.colorScheme.onSurfaceVariant),
+          'Fetched ${ago(clock.now().difference(lastFetchAt))}',
+          '$auto · click to fetch now',
+        ),
+      _ => (
+          Icon(Icons.cloud_queue, size: 15, color: theme.colorScheme.onSurfaceVariant),
+          'Not fetched yet',
+          '$auto · click to fetch now',
+        ),
+    };
+
+    return Tooltip(
+      message: tooltip,
+      child: InkWell(
+        borderRadius: BorderRadius.circular(6),
+        onTap: state.autoFetching
+            ? null
+            : state.fetchError != null
+                ? () => runGitAction(context, ref, widget.repo, const FetchAction(), successMessage: 'Fetched')
+                : ref.read(repoNotifierProvider(widget.repo).notifier).backgroundFetch,
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 4),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              icon,
+              if (!widget.compact) ...[
+                const SizedBox(width: 6),
+                Flexible(
+                  child: Text(
+                    text,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: state.fetchError != null ? faded?.copyWith(color: theme.colorScheme.error) : faded,
+                  ),
+                ),
+              ],
+            ],
+          ),
         ),
       ),
     );

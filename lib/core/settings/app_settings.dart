@@ -18,13 +18,19 @@ class AppSettings {
   /// Notificación del sistema al terminar push/pull/fetch/clone largos.
   final bool notifications;
 
+  /// Cada cuántos minutos hacer fetch en segundo plano (0 = nunca).
+  final int autoFetchMinutes;
+
   const AppSettings({
     this.themeMode = ThemeMode.system,
     this.diffFontSize = 12.5,
     this.wrapLines = true,
     this.ignoreWhitespace = false,
     this.notifications = true,
+    this.autoFetchMinutes = 5,
   });
+
+  static const autoFetchChoices = [0, 1, 2, 5, 10, 15];
 
   static const minFontSize = 10.0;
   static const maxFontSize = 20.0;
@@ -35,6 +41,7 @@ class AppSettings {
     bool? wrapLines,
     bool? ignoreWhitespace,
     bool? notifications,
+    int? autoFetchMinutes,
   }) =>
       AppSettings(
         themeMode: themeMode ?? this.themeMode,
@@ -42,6 +49,7 @@ class AppSettings {
         wrapLines: wrapLines ?? this.wrapLines,
         ignoreWhitespace: ignoreWhitespace ?? this.ignoreWhitespace,
         notifications: notifications ?? this.notifications,
+        autoFetchMinutes: autoFetchMinutes ?? this.autoFetchMinutes,
       );
 
   Map<String, Object> toMap() => {
@@ -50,6 +58,7 @@ class AppSettings {
         'wrapLines': wrapLines,
         'ignoreWhitespace': ignoreWhitespace,
         'notifications': notifications,
+        'autoFetchMinutes': autoFetchMinutes,
       };
 
   factory AppSettings.fromMap(Map<String, Object?> map) {
@@ -60,6 +69,7 @@ class AppSettings {
       wrapLines: map['wrapLines'] as bool?,
       ignoreWhitespace: map['ignoreWhitespace'] as bool?,
       notifications: map['notifications'] as bool?,
+      autoFetchMinutes: (map['autoFetchMinutes'] as num?)?.toInt(),
     );
   }
 }
@@ -97,6 +107,8 @@ class PrefsSettingsStore implements SettingsStore {
             await prefs.setBool(key, v);
           case final double v:
             await prefs.setDouble(key, v);
+          case final int v:
+            await prefs.setInt(key, v);
           case final String v:
             await prefs.setString(key, v);
         }

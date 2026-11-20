@@ -86,3 +86,31 @@ String cleanCommitTemplate(String raw) => raw
     .where((l) => !l.trimLeft().startsWith('#'))
     .join('\n')
     .trim();
+
+enum RemoteUpdateKind { newBranch, updated, deleted }
+
+/// Algo que cambió en una rama remota al hacer fetch (p. ej. un compañero
+/// hizo push).
+class RemoteUpdate {
+  /// `origin/feature-x`
+  final String ref;
+  final RemoteUpdateKind kind;
+
+  /// Commits nuevos (en ramas nuevas o actualizadas).
+  final int commits;
+
+  /// Autor del último commit.
+  final String author;
+
+  /// SHA nuevo de la rama (vacío si se borró).
+  final String sha;
+
+  const RemoteUpdate({required this.ref, required this.kind, this.commits = 0, this.author = '', this.sha = ''});
+
+  String get summary => switch (kind) {
+        RemoteUpdateKind.newBranch => 'new branch $ref${author.isEmpty ? '' : ' by $author'}',
+        RemoteUpdateKind.updated =>
+          '$ref: $commits new commit${commits == 1 ? '' : 's'}${author.isEmpty ? '' : ' by $author'}',
+        RemoteUpdateKind.deleted => '$ref was deleted',
+      };
+}

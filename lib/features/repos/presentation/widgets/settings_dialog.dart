@@ -87,6 +87,30 @@ class _SettingsDialog extends ConsumerWidget {
                 contentPadding: EdgeInsets.zero,
                 dense: true,
               ),
+              section('Remote'),
+              Row(
+                children: [
+                  const Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text('Auto-fetch'),
+                        Text('Check the remote in the background so new pushes appear in the graph',
+                            style: TextStyle(fontSize: 12)),
+                      ],
+                    ),
+                  ),
+                  const SizedBox(width: 12),
+                  DropdownButton<int>(
+                    value: settings.autoFetchMinutes,
+                    items: [
+                      for (final m in AppSettings.autoFetchChoices)
+                        DropdownMenuItem(value: m, child: Text(m == 0 ? 'Off' : 'Every $m min')),
+                    ],
+                    onChanged: (v) => set((s) => s.copyWith(autoFetchMinutes: v)),
+                  ),
+                ],
+              ),
               section('Notifications'),
               SwitchListTile(
                 value: settings.notifications,

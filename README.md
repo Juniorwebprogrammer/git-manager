@@ -5,18 +5,19 @@
 <h1 align="center">Git Manager</h1>
 
 <p align="center">
-  Switch between your GitHub accounts — personal, work, whatever — without touching the terminal.
+  Switch between your GitHub and Azure DevOps accounts — personal, work, whatever — without touching the terminal.
 </p>
 
 ---
 
 ## Why
 
-Switching git identities from the command line (SSH keys, `user.name`/`user.email`, HTTPS credentials) is fiddly and easy to get wrong. Git Manager is a small Linux/Windows desktop app that keeps multiple GitHub accounts on file, verifies each one against the GitHub API, and lets you switch your machine's active git identity with a single **Connect** click.
+Switching git identities from the command line (SSH keys, `user.name`/`user.email`, HTTPS credentials) is fiddly and easy to get wrong. Git Manager is a small Linux/Windows desktop app that keeps multiple GitHub and Azure DevOps accounts on file, verifies each one against its API, and lets you switch your machine's active git identity with a single **Connect** click.
 
 ## Features
 
 - **Add an account** with a GitHub Personal Access Token. The token is validated against the GitHub API (`GET /user`) before it's saved — a "ping" that confirms it actually works.
+- **Azure DevOps accounts** (dev.azure.com): choose *Azure DevOps* in *Add account* and paste a PAT with the scopes **Code: Read & write** and **User Profile: Read**, created for *All accessible organizations* — every organization you belong to is picked up. If the token is limited to one organization, type it in the *Organization* field. One GitHub and one Azure account can be connected at the same time; remotes on `dev.azure.com` and `{org}.visualstudio.com` (HTTPS) are authenticated with the Azure token.
 - **Accounts list** as cards (avatar, name, `@login`); the currently active account is highlighted in green.
 - **Account detail** screen with profile info, a link to the GitHub profile, and the **Connect** / **Remove account** actions.
 - **Connect** switches your machine's active git identity in one step:
@@ -32,7 +33,8 @@ Switching git identities from the command line (SSH keys, `user.name`/`user.emai
 
 Click an account card to open its **workspace**: your projects in tabs (remembered per account), each one with a full git client.
 
-- **Open or clone**: open any local repository, or pick one of your GitHub repositories (listed with the account's token) and clone it.
+- **Open or clone**: open any local repository, or pick one of your GitHub repositories — or, for an Azure account, the repositories of every project in its organizations — and clone it.
+- **One account per service**: a tab uses its account's token only for that service. Pushing an Azure repository from a GitHub account's workspace (or the other way round) fails with a message explaining which account to open it from.
 - **Commit graph**: the history of all branches, remotes and tags drawn as coloured lanes, with branch/tag labels, author, date and SHA. Double-click a label to check it out; right-click a commit to check it out, branch or tag from it, cherry-pick, revert or reset (soft / mixed / hard).
 - **Toolbar**: Pull (merge or **rebase**, from the ▾ menu), Push (sets upstream automatically on first push; offers force-with-lease if rejected), Fetch, Branch, Stash, Pop — with ahead/behind counters. Click the branch name to switch branches. The layout adapts to narrow windows (icon-only toolbar, collapsible sidebar, fewer graph columns).
 - **Rebase**: rebase the current branch onto any branch, tag or commit, or rebase another branch onto the current one (right-click in the sidebar or the graph), or **drag a branch onto another** in the sidebar to merge or rebase. Local changes are auto-stashed. On conflicts a banner shows the progress (*step 2/5*) with **Continue**, **Skip** and **Abort**.
@@ -42,6 +44,7 @@ Click an account card to open its **workspace**: your projects in tabs (remember
 - **Merge modes**: regular merge, *create merge commit* (`--no-ff`, keeps the merge bubble visible) and *squash* (all changes as one commit), from the sidebar menu or by dragging a branch onto another.
 - **Interactive rebase**: right-click a commit (*from here*) or a branch (*onto …*) to reorder commits by dragging and **pick / reword / squash / fixup / drop** each one.
 - **GitHub pull requests**: the *Pull requests* section lists the open PRs of `origin` with their CI status (✅ / ❌ / ⏳), lets you check one out (forks included) or open it on GitHub, and the **PR** button creates one from the current branch (pushing it first if needed, optional draft).
+- **Azure Repos pull requests**: the same list, view and actions work for repositories on Azure DevOps. *Review* votes (*Approve* = approve, *Request changes* = wait for author), *Merge* completes the PR (merge commit / squash / rebase, optionally deleting the source branch) when the branch policies allow it, *Close* abandons it and *Reopen* reactivates it. Checks show branch policies (required reviewers, builds…) and external statuses. Azure does not return diffs through its API, so the app fetches the PR's commits and computes *Files changed* with git locally (no local branches are created); fork PRs are checked out from `refs/pull/N/merge`.
 - **Pull request view** (click a PR in the sidebar): conversation (description, comments and reviews, with basic Markdown), commits, files changed with their diffs, and CI checks — plus **Merge** (merge commit / squash / rebase, optionally deleting the branch), **Review** (approve / request changes / comment), **Comment**, **Close / Reopen**, **Edit** title and description, and **Checkout**, all without leaving the app. It also says whether the PR can be merged and why not (conflicts, branch protection, draft…).
 - **Code review comments**: in *Files changed*, comment threads appear under the line they refer to (with **Reply**); click a line number to comment on that line. Outdated threads are listed above the diff, and code comments also show up in the conversation as `file:line`.
 - **Command palette** (`Ctrl+Shift+P` or the 🔍 button): fuzzy-search and run anything — fetch/pull/push, checkout/merge/rebase/compare any branch, undo/redo, view a PR, blame or history of a changed file, theme, settings, switch tab.

@@ -1,10 +1,19 @@
-/// Repo de GitHub al que apunta el remoto `origin` de un repo local.
-class GitHubRepoInfo {
+import '../../../../core/hosting/git_provider.dart';
+
+/// Repo (de GitHub o Azure Repos) al que apunta el remoto de un repo local.
+class HostedRepoInfo {
+  /// GitHub: el dueño; Azure: `organización/proyecto`.
   final String owner;
   final String name;
   final String defaultBranch;
+  final GitProvider provider;
 
-  const GitHubRepoInfo({required this.owner, required this.name, this.defaultBranch = 'main'});
+  const HostedRepoInfo({
+    required this.owner,
+    required this.name,
+    this.defaultBranch = 'main',
+    this.provider = GitProvider.github,
+  });
 
   String get fullName => '$owner/$name';
 }
@@ -25,6 +34,10 @@ class PullRequest {
   final bool draft;
   final DateTime? updatedAt;
   final CiStatus ci;
+  final GitProvider provider;
+
+  /// La rama viene de un fork. null = deducirlo de la URL (GitHub).
+  final bool? fork;
 
   const PullRequest({
     required this.number,
@@ -38,10 +51,12 @@ class PullRequest {
     this.draft = false,
     this.updatedAt,
     this.ci = CiStatus.none,
+    this.provider = GitProvider.github,
+    this.fork,
   });
 
   /// La rama vive en otro repo (fork): el enlace de la PR es del repo base.
-  bool get isFromFork => headRepoFullName.isEmpty || !url.contains('/$headRepoFullName/pull/');
+  bool get isFromFork => fork ?? (headRepoFullName.isEmpty || !url.contains('/$headRepoFullName/pull/'));
 
   PullRequest copyWith({CiStatus? ci}) => PullRequest(
         number: number,
@@ -55,6 +70,8 @@ class PullRequest {
         draft: draft,
         updatedAt: updatedAt,
         ci: ci ?? this.ci,
+        provider: provider,
+        fork: fork,
       );
 }
 

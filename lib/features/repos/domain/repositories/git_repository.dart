@@ -1,4 +1,5 @@
 import '../../../../core/error/result.dart';
+import '../../../../core/hosting/git_provider.dart';
 import '../entities/file_diff.dart';
 import '../entities/git_action.dart';
 import '../entities/git_commit.dart';
@@ -57,8 +58,12 @@ abstract interface class GitRepository {
   /// Texto de `commit.template` (sin comentarios), si hay uno configurado.
   Future<Result<String?>> loadCommitTemplate(RepoHandle repo);
 
+  /// Remoto principal reconocido (GitHub o Azure DevOps); null si no hay
+  /// remoto o es de otro servicio.
+  Future<Result<HostedRemote?>> loadHostedRemote(RepoHandle repo);
+
   /// Repo de GitHub al que apunta `origin` (falla si no es de github.com).
-  Future<Result<GitHubRepoInfo>> githubRepoInfo(RepoHandle repo);
+  Future<Result<HostedRepoInfo>> hostedRepoInfo(RepoHandle repo);
 
   /// Pull Requests abiertas del repo de `origin`, con su estado de CI.
   Future<Result<List<PullRequest>>> listPullRequests(RepoHandle repo);

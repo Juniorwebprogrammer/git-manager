@@ -9,4 +9,9 @@ class AddAccountUseCase {
 
   Future<Result<GitAccount>> call(String token) =>
       _repository.addAccount(token.trim());
+
+  Future<Result<GitAccount>> azure(String token, {String? organization}) => _repository.addAzureAccount(
+        token.trim(),
+        organization: organization?.trim().isEmpty ?? true ? null : organization!.trim(),
+      );
 }

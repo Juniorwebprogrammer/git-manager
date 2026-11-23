@@ -10,6 +10,10 @@ abstract interface class AccountRepository {
   /// persiste la nueva cuenta.
   Future<Result<GitAccount>> addAccount(String token);
 
+  /// Valida un PAT de Azure DevOps, obtiene el perfil y las organizaciones
+  /// (o comprueba [organization] si se indica) y guarda la cuenta.
+  Future<Result<GitAccount>> addAzureAccount(String token, {String? organization});
+
   /// Vuelve a comprobar contra GitHub que el token de la cuenta sigue
   /// siendo válido, refrescando sus datos de perfil.
   Future<Result<GitAccount>> testConnection(String accountId);

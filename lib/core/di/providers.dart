@@ -7,6 +7,7 @@ import '../system/signing_keys.dart';
 import '../system/system_launcher.dart';
 
 import '../../features/accounts/data/datasources/account_local_data_source.dart';
+import '../../features/accounts/data/datasources/azure_devops_remote_data_source.dart';
 import '../../features/accounts/data/datasources/git_config_data_source.dart';
 import '../../features/accounts/data/datasources/git_credentials_data_source.dart';
 import '../../features/accounts/data/datasources/github_remote_data_source.dart';
@@ -36,6 +37,10 @@ final gitHubRemoteDataSourceProvider = Provider<GitHubRemoteDataSource>((ref) {
   return GitHubRemoteDataSource(ref.watch(httpClientProvider));
 });
 
+final azureDevOpsRemoteDataSourceProvider = Provider<AzureDevOpsRemoteDataSource>((ref) {
+  return AzureDevOpsRemoteDataSource(ref.watch(httpClientProvider));
+});
+
 final accountLocalDataSourceProvider = Provider<AccountLocalDataSource>((ref) {
   return AccountLocalDataSource(ref.watch(secureStorageProvider));
 });
@@ -54,6 +59,7 @@ final accountRepositoryProvider = Provider<AccountRepository>((ref) {
     local: ref.watch(accountLocalDataSourceProvider),
     gitConfig: ref.watch(gitConfigDataSourceProvider),
     gitCredentials: ref.watch(gitCredentialsDataSourceProvider),
+    azure: ref.watch(azureDevOpsRemoteDataSourceProvider),
   );
 });
 
@@ -90,6 +96,7 @@ final gitRepositoryProvider = Provider<GitRepository>((ref) {
     cli: ref.watch(gitCliDataSourceProvider),
     accounts: ref.watch(accountLocalDataSourceProvider),
     github: ref.watch(gitHubRemoteDataSourceProvider),
+    azure: ref.watch(azureDevOpsRemoteDataSourceProvider),
   );
 });
 

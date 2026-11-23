@@ -5,6 +5,8 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../../core/di/providers.dart';
+import '../../../../core/hosting/git_provider.dart';
+import '../../../accounts/presentation/state/accounts_notifier.dart';
 import '../../../../core/settings/app_settings.dart';
 import '../../../../core/error/result.dart';
 import '../../domain/entities/remote_repository.dart';
@@ -19,13 +21,17 @@ Future<String?> showOpenRepoDialog(BuildContext context, String accountId) {
   );
 }
 
-class _OpenRepoDialog extends StatelessWidget {
+class _OpenRepoDialog extends ConsumerWidget {
   final String accountId;
 
   const _OpenRepoDialog({required this.accountId});
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
+    final provider = ref.watch(accountsNotifierProvider.select(
+          (s) => s.accounts.where((a) => a.id == accountId).firstOrNull?.provider,
+        )) ??
+        GitProvider.github;
     return Dialog(
       clipBehavior: Clip.antiAlias,
       child: SizedBox(
@@ -35,9 +41,9 @@ class _OpenRepoDialog extends StatelessWidget {
           length: 2,
           child: Column(
             children: [
-              const TabBar(tabs: [
-                Tab(icon: Icon(Icons.folder_open), text: 'Open local repository'),
-                Tab(icon: Icon(Icons.cloud_download_outlined), text: 'Clone from GitHub'),
+              TabBar(tabs: [
+                const Tab(icon: Icon(Icons.folder_open), text: 'Open local repository'),
+                Tab(icon: const Icon(Icons.cloud_download_outlined), text: 'Clone from ${provider.label}'),
               ]),
               Expanded(
                 child: TabBarView(children: [

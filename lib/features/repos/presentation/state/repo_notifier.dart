@@ -4,6 +4,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:path/path.dart' as p;
 
 import '../../../../core/di/providers.dart';
+import '../../../../core/hosting/git_provider.dart';
 import '../../../../core/settings/app_settings.dart';
 import '../../../../core/error/app_failure.dart';
 import '../../../../core/error/result.dart';
@@ -669,3 +670,13 @@ final pullRequestBundleProvider =
 
 /// Cuánto tiene que tardar una operación de red para avisar al terminar.
 final notificationThresholdProvider = Provider<Duration>((ref) => const Duration(seconds: 5));
+
+/// A qué servicio (GitHub, Azure DevOps) apunta el remoto del repo.
+final hostedRemoteProvider = FutureProvider.family<HostedRemote?, RepoHandle>((ref, repo) async {
+  final result = await ref.read(gitRepositoryProvider).loadHostedRemote(repo);
+  return switch (result) {
+    Success(:final value) => value,
+    Failure() => null,
+  };
+});
+

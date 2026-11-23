@@ -94,7 +94,7 @@ class _RefSidebarState extends ConsumerState<RefSidebar> {
     );
   }
 
-  /// Sección de Pull Requests de GitHub (se cargan con el token de la cuenta).
+  /// Sección de Pull Requests de GitHub o Azure Repos (con el token de la cuenta).
   Widget _pullRequests(BuildContext context) {
     final theme = Theme.of(context);
     final pulls = ref.watch(pullRequestsProvider(widget.repo));
@@ -710,7 +710,7 @@ class _PullRequestTile extends ConsumerWidget {
     final value = await showContextMenu<String>(context, position, [
       menuItem('view', Icons.visibility_outlined, 'View pull request'),
       menuItem('checkout', Icons.login, 'Checkout PR #${pr.number}'),
-      menuItem('open', Icons.open_in_new, 'Open on GitHub'),
+      menuItem('open', Icons.open_in_new, 'Open on ${pr.provider.label}'),
       menuItem('copy', Icons.link, 'Copy link'),
     ]);
     if (value == null || !context.mounted) return;

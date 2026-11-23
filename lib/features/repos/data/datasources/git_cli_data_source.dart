@@ -9,6 +9,7 @@ import '../../domain/entities/file_change.dart';
 import '../../domain/entities/file_diff.dart';
 import '../../domain/entities/git_action.dart';
 import '../../domain/entities/git_commit.dart';
+import '../../domain/entities/pull_request_detail.dart';
 import '../../domain/entities/repo_extras.dart';
 import '../../domain/entities/repo_snapshot.dart';
 import '../parsers/git_parsers.dart';
@@ -436,13 +437,77 @@ class GitCliDataSource {
     }
 
     // PR desde un fork: se trae refs/pull/N/head a una rama local pr/N.
+    // Azure Repos no publica ese ref, solo refs/pull/N/merge: su segundo
+    // padre es la punta de la rama de la PR.
     final local = 'pr/$number';
-    await git(['fetch', remote, 'pull/$number/head']);
-    if (current == local) {
-      await git(['merge', '--ff-only', 'FETCH_HEAD']);
-    } else {
-      await git(['switch', '-C', local, 'FETCH_HEAD']);
+    var tip = 'FETCH_HEAD';
+    final head = await _git.tryRun(['fetch', remote, 'pull/$number/head'], workingDirectory: path, identity: identity);
+    if (!head.ok) {
+      final merge = await _git.tryRun(['fetch', remote, 'pull/$number/merge'], workingDirectory: path, identity: identity);
+      if (!merge.ok) throw GitCommandException(friendlyGitError(head.message));
+      tip = (await git(['rev-parse', 'FETCH_HEAD^2'])).trim();
     }
+    if (current == local) {
+      await git(['merge', '--ff-only', tip]);
+    } else {
+      await git(['switch', '-C', local, tip]);
+    }
+  }
+
+  /// Se asegura de tener los commits [shas] (de una PR) trayendo, uno a uno,
+  /// los [refs] del remoto hasta que estén todos. No crea ramas.
+  Future<void> ensureCommits(String path, GitIdentity identity, List<String> shas, List<String> refs) async {
+    Future<bool> haveAll() async {
+      for (final sha in shas) {
+        if (!(await _git.tryRun(['cat-file', '-e', '$sha^{commit}'], workingDirectory: path)).ok) return false;
+      }
+      return true;
+    }
+
+    if (await haveAll()) return;
+    final remote = await _defaultRemote(path);
+    for (final ref in [...refs, ...shas]) {
+      await _git.tryRun(['fetch', '--no-tags', remote, ref], workingDirectory: path, identity: identity);
+      if (await haveAll()) return;
+    }
+    throw const GitCommandException('The commits of this pull request could not be fetched.');
+  }
+
+  /// Ficheros de una PR con su diff: cambios de [head] desde su ancestro
+  /// común con [base] (como `base...head`).
+  Future<List<PullRequestFile>> pullRequestFiles(String path, String base, String head) async {
+    final range = '$base...$head';
+    final changes = parseNameStatus(
+      await _git.run(['diff', '--name-status', '-z', '-M', range], workingDirectory: path),
+    );
+    final patch = await _git.run(['diff', '--no-ext-diff', '-M', range], workingDirectory: path);
+    final chunks = patch.split(RegExp(r'^diff --git ', multiLine: true)).where((c) => c.isNotEmpty).toList();
+    return [
+      for (var i = 0; i < changes.length; i++) _pullRequestFile(changes[i], i < chunks.length ? chunks[i] : null),
+    ];
+  }
+
+  static PullRequestFile _pullRequestFile(FileChange change, String? chunk) {
+    String? body;
+    var additions = 0, deletions = 0;
+    if (chunk != null && !chunk.contains('\nBinary files ') && !chunk.contains('\nGIT binary patch')) {
+      final start = chunk.indexOf('\n@@');
+      body = start < 0 ? '' : chunk.substring(start + 1).trimRight();
+      for (final line in body.split('\n')) {
+        if (line.startsWith('+')) additions++;
+        if (line.startsWith('-')) deletions++;
+      }
+      // Diffs enormes: como GitHub, sin texto.
+      if (body.length > 1024 * 1024) body = null;
+    }
+    return PullRequestFile(
+      path: change.path,
+      oldPath: change.oldPath,
+      type: change.type,
+      additions: additions,
+      deletions: deletions,
+      patch: body,
+    );
   }
 
   Future<List<GitCommit>> commitsForRebase(String path, String base) async {
@@ -576,7 +641,8 @@ class GitCliDataSource {
 
   Future<String> remoteUrl(String path) async {
     final remote = await _defaultRemote(path);
-    return (await _git.run(['remote', 'get-url', remote], workingDirectory: path)).trim();
+    // URL tal cual se configuró (sin reescrituras insteadOf): identifica el servicio.
+    return (await _git.run(['config', '--get', 'remote.$remote.url'], workingDirectory: path)).trim();
   }
 
   Future<void> _interactiveRebase(String path, GitIdentity identity, String base, List<RebaseStep> steps) async {
@@ -633,6 +699,9 @@ class GitCliDataSource {
   Future<String> clone(String url, String parentDirectory, GitIdentity identity) async {
     var name = url.split('/').last;
     if (name.endsWith('.git')) name = name.substring(0, name.length - 4);
+    try {
+      name = Uri.decodeComponent(name); // Azure: "My%20Repo"
+    } catch (_) {}
     final destination = p.join(parentDirectory, name);
     if (await Directory(destination).exists()) {
       throw GitCommandException('"$destination" already exists.');

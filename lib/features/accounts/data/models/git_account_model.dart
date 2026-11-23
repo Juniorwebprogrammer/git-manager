@@ -1,3 +1,4 @@
+import '../../../../core/hosting/git_provider.dart';
 import '../../domain/entities/git_account.dart';
 
 /// Representación persistida de una cuenta, incluye el token (que nunca
@@ -12,6 +13,10 @@ class GitAccountModel {
   final String profileUrl;
   final String token;
   final bool isActive;
+  final GitProvider provider;
+
+  /// Organizaciones de Azure DevOps de la cuenta (vacío en GitHub).
+  final List<String> organizations;
 
   const GitAccountModel({
     required this.id,
@@ -22,6 +27,8 @@ class GitAccountModel {
     required this.profileUrl,
     required this.token,
     this.isActive = false,
+    this.provider = GitProvider.github,
+    this.organizations = const [],
   });
 
   factory GitAccountModel.fromJson(Map<String, dynamic> json) {
@@ -34,6 +41,8 @@ class GitAccountModel {
       profileUrl: json['profileUrl'] as String? ?? '',
       token: json['token'] as String,
       isActive: json['isActive'] as bool? ?? false,
+      provider: GitProvider.fromName(json['provider'] as String?),
+      organizations: (json['organizations'] as List<dynamic>? ?? const []).cast<String>(),
     );
   }
 
@@ -46,6 +55,8 @@ class GitAccountModel {
         'profileUrl': profileUrl,
         'token': token,
         'isActive': isActive,
+        'provider': provider.name,
+        'organizations': organizations,
       };
 
   GitAccountModel copyWith({
@@ -54,6 +65,7 @@ class GitAccountModel {
     String? avatarUrl,
     String? token,
     bool? isActive,
+    List<String>? organizations,
   }) {
     return GitAccountModel(
       id: id,
@@ -64,6 +76,8 @@ class GitAccountModel {
       profileUrl: profileUrl,
       token: token ?? this.token,
       isActive: isActive ?? this.isActive,
+      provider: provider,
+      organizations: organizations ?? this.organizations,
     );
   }
 
@@ -75,5 +89,7 @@ class GitAccountModel {
         avatarUrl: avatarUrl,
         profileUrl: profileUrl,
         isActive: isActive,
+        provider: provider,
+        organizations: organizations,
       );
 }

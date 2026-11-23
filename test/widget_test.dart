@@ -17,6 +17,10 @@ class _FakeAccountRepository implements AccountRepository {
       throw UnimplementedError();
 
   @override
+  Future<Result<GitAccount>> addAzureAccount(String token, {String? organization}) =>
+      throw UnimplementedError();
+
+  @override
   Future<Result<GitAccount>> testConnection(String accountId) =>
       throw UnimplementedError();
 

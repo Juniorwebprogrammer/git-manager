@@ -1,3 +1,4 @@
+import '../../../../core/hosting/git_provider.dart';
 import 'file_change.dart';
 import 'pull_request.dart';
 
@@ -70,6 +71,10 @@ class PullRequestDetail {
   final int changedFiles;
   final DateTime? createdAt;
   final String? mergedBy;
+  final GitProvider provider;
+
+  /// La rama viene de un fork. null = deducirlo de la URL (GitHub).
+  final bool? fork;
 
   const PullRequestDetail({
     required this.number,
@@ -90,10 +95,36 @@ class PullRequestDetail {
     this.changedFiles = 0,
     this.createdAt,
     this.mergedBy,
+    this.provider = GitProvider.github,
+    this.fork,
   });
 
   bool get isOpen => state == PullRequestState.open || state == PullRequestState.draft;
-  bool get isFromFork => headRepoFullName.isEmpty || !url.contains('/$headRepoFullName/pull/');
+  bool get isFromFork => fork ?? (headRepoFullName.isEmpty || !url.contains('/$headRepoFullName/pull/'));
+
+  PullRequestDetail copyWith({int? commitCount, int? additions, int? deletions, int? changedFiles}) =>
+      PullRequestDetail(
+        number: number,
+        title: title,
+        body: body,
+        author: author,
+        state: state,
+        headRef: headRef,
+        headSha: headSha,
+        headRepoFullName: headRepoFullName,
+        baseRef: baseRef,
+        url: url,
+        mergeable: mergeable,
+        mergeableState: mergeableState,
+        commitCount: commitCount ?? this.commitCount,
+        additions: additions ?? this.additions,
+        deletions: deletions ?? this.deletions,
+        changedFiles: changedFiles ?? this.changedFiles,
+        createdAt: createdAt,
+        mergedBy: mergedBy,
+        provider: provider,
+        fork: fork,
+      );
 
   /// Explicación legible de `mergeable_state`.
   ({bool canMerge, String text}) get mergeability => switch (mergeableState) {
@@ -107,10 +138,13 @@ class PullRequestDetail {
           ),
         'blocked' => (
             canMerge: false,
-            text: 'Blocked by branch protection (required reviews or checks are missing).'
+            text: provider == GitProvider.azure
+                ? 'Blocked by branch policies (required reviewers, builds or linked work items are missing).'
+                : 'Blocked by branch protection (required reviews or checks are missing).'
           ),
-        'draft' => (canMerge: false, text: 'Draft: mark it as ready for review on GitHub before merging.'),
-        _ => (canMerge: mergeable ?? false, text: 'GitHub is still checking whether it can be merged…'),
+        'failed' => (canMerge: false, text: '${provider.label} could not compute the merge with $baseRef.'),
+        'draft' => (canMerge: false, text: 'Draft: mark it as ready for review on ${provider.label} before merging.'),
+        _ => (canMerge: mergeable ?? false, text: '${provider.label} is still checking whether it can be merged…'),
       };
 }
 

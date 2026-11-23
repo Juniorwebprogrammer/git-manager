@@ -53,6 +53,14 @@ class AccountsNotifier extends Notifier<AccountsState> {
     return error;
   }
 
+  Future<Result<GitAccount>> addAzure(String token, {String? organization}) async {
+    final result = await ref.read(addAccountUseCaseProvider).azure(token, organization: organization);
+    if (result case Success(:final value)) {
+      state = state.copyWith(accounts: [...state.accounts, value]);
+    }
+    return result;
+  }
+
   Future<Result<GitAccount>> add(String token) async {
     final result = await ref.read(addAccountUseCaseProvider).call(token);
     if (result case Success(:final value)) {

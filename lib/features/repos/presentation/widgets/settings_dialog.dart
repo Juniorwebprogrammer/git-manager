@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../../core/di/providers.dart';
 import '../../../../core/settings/app_settings.dart';
+import '../../../updates/presentation/update_notifier.dart';
 import 'ui_helpers.dart';
 
 Future<void> showSettingsDialog(BuildContext context) =>
@@ -133,11 +134,75 @@ class _SettingsDialog extends ConsumerWidget {
                   label: const Text('Send a test notification'),
                 ),
               ),
+              section('Updates'),
+              _UpdatesSection(
+                checkAutomatically: settings.checkForUpdates,
+                onChanged: (v) => set((s) => s.copyWith(checkForUpdates: v)),
+              ),
             ],
           ),
         ),
       ),
       actions: [FilledButton(onPressed: () => Navigator.pop(context), child: const Text('Done'))],
+    );
+  }
+}
+
+class _UpdatesSection extends ConsumerWidget {
+  final bool checkAutomatically;
+  final ValueChanged<bool> onChanged;
+
+  const _UpdatesSection({required this.checkAutomatically, required this.onChanged});
+
+  Future<void> _checkNow(BuildContext context, WidgetRef ref) async {
+    final result = await ref.read(updateNotifierProvider.notifier).check(manual: true);
+    if (!context.mounted) return;
+    switch (result.phase) {
+      case UpdatePhase.upToDate:
+        showToast(context, "You're on the latest version");
+      case UpdatePhase.available:
+        showToast(context, 'Git Manager ${result.release!.version} is available — see the bar at the top');
+      case UpdatePhase.failed:
+        showToast(context, result.error ?? 'Could not check for updates');
+      default:
+        break;
+    }
+  }
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final theme = Theme.of(context);
+    final version = ref.watch(currentAppVersionProvider);
+    final checking = ref.watch(updateNotifierProvider.select((s) => s.phase == UpdatePhase.checking));
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        SwitchListTile(
+          value: checkAutomatically,
+          onChanged: onChanged,
+          title: const Text('Check for updates automatically'),
+          subtitle: const Text('When a new version is released you get a notice and can install it in one click'),
+          contentPadding: EdgeInsets.zero,
+          dense: true,
+        ),
+        Row(
+          children: [
+            Expanded(
+              child: Text(
+                version == null ? 'Git Manager' : 'Git Manager $version',
+                style: theme.textTheme.bodySmall?.copyWith(color: theme.colorScheme.onSurfaceVariant),
+              ),
+            ),
+            TextButton.icon(
+              onPressed: checking ? null : () => _checkNow(context, ref),
+              icon: checking
+                  ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2))
+                  : const Icon(Icons.system_update_alt, size: 18),
+              label: Text(checking ? 'Checking…' : 'Check now'),
+            ),
+          ],
+        ),
+      ],
     );
   }
 }

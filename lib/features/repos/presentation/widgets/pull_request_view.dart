@@ -631,7 +631,7 @@ class _EventCard extends StatelessWidget {
                         fontStyle: FontStyle.italic,
                       ),
                     )
-                  : _MarkdownText(event.body),
+                  : MarkdownText(event.body),
             ),
         ],
       ),
@@ -641,10 +641,10 @@ class _EventCard extends StatelessWidget {
 
 /// Markdown mínimo: títulos, listas, citas y bloques de código. Suficiente
 /// para leer descripciones y comentarios sin dependencias.
-class _MarkdownText extends StatelessWidget {
+class MarkdownText extends StatelessWidget {
   final String text;
 
-  const _MarkdownText(this.text);
+  const MarkdownText(this.text, {super.key});
 
   @override
   Widget build(BuildContext context) {
@@ -1053,7 +1053,7 @@ class _Thread extends StatelessWidget {
                           style: theme.textTheme.labelSmall?.copyWith(color: theme.colorScheme.onSurfaceVariant)),
                   ]),
                   const SizedBox(height: 4),
-                  _MarkdownText(c.body),
+                  MarkdownText(c.body),
                 ],
               ),
             ),

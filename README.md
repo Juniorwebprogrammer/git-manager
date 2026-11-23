@@ -25,6 +25,9 @@ Switching git identities from the command line (SSH keys, `user.name`/`user.emai
   - Writes the account's token into `~/.git-credentials` via git's `credential.helper store`, so `git clone` / `push` / `pull` over HTTPS stop prompting for a username/password.
 - Tokens are stored **encrypted in the OS's native secure storage** (libsecret on Linux, Credential Manager on Windows), never in plain text inside the app's own data.
 - Ships as an installable **.deb** package on Linux, with a proper app icon and a GUI **Uninstall Git Manager** entry — no terminal needed for install or removal.
+- **Automatic updates**: the app checks the latest GitHub release when it starts and every 6 hours. When there is a new version you get a system notification and a bar at the top with *What's new*, **Update**, *Later* and *Skip this version*. **Update** downloads the `.deb`, verifies its SHA-256 checksum and that it is the expected Git Manager version, installs it with `pkexec apt-get install` (your password is asked in a system window) and offers **Restart now**. If the app was not installed from the `.deb` (e.g. Windows or `flutter run`), the button opens the release page instead. Turn it off or *Check now* in *Settings → Updates*.
+
+  For an update to be installable, each release must attach `git-manager_<version>_amd64.deb` and `git-manager_<version>_amd64.deb.sha256` (the output of `sha256sum`), and the tag must be `v<version>`.
 
 ## Projects workspace (GitKraken-style)
 

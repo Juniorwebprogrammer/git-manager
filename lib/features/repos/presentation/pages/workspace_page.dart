@@ -3,6 +3,7 @@ import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:path/path.dart' as p;
 
+import '../../../../core/hosting/git_provider.dart';
 import '../../../accounts/presentation/pages/account_detail_page.dart';
 import '../../../accounts/presentation/state/accounts_notifier.dart';
 import '../../../accounts/presentation/widgets/account_avatar.dart';
@@ -83,7 +84,7 @@ class WorkspacePage extends ConsumerWidget {
                       icon: const Icon(Icons.arrow_back),
                     ),
                     Tooltip(
-                      message: '${account.nameOrLogin} (@${account.login})\nCommits and pushes use this account',
+                      message: '${account.nameOrLogin} (${account.handle}) · ${account.provider.label}\nCommits and pushes use this account',
                       child: InkWell(
                         borderRadius: BorderRadius.circular(20),
                         onTap: () => Navigator.of(
@@ -95,7 +96,15 @@ class WorkspacePage extends ConsumerWidget {
                             children: [
                               AccountAvatar(account: account, radius: 13),
                               const SizedBox(width: 8),
-                              Text('@${account.login}', style: theme.textTheme.labelLarge),
+                              ConstrainedBox(
+                                constraints: const BoxConstraints(maxWidth: 220),
+                                child: Text(
+                                  account.provider == GitProvider.github ? account.handle : account.login,
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis,
+                                  style: theme.textTheme.labelLarge,
+                                ),
+                              ),
                             ],
                           ),
                         ),
@@ -142,7 +151,7 @@ class WorkspacePage extends ConsumerWidget {
                 child: workspace.isLoading
                     ? const Center(child: CircularProgressIndicator())
                     : workspace.tabs.isEmpty
-                    ? _EmptyWorkspace(onOpen: () => _openRepo(context, ref))
+                    ? _EmptyWorkspace(service: account.provider.label, onOpen: () => _openRepo(context, ref))
                     : IndexedStack(
                         index: workspace.activeIndex,
                         children: [
@@ -253,9 +262,10 @@ class _RepoTab extends ConsumerWidget {
 }
 
 class _EmptyWorkspace extends StatelessWidget {
+  final String service;
   final VoidCallback onOpen;
 
-  const _EmptyWorkspace({required this.onOpen});
+  const _EmptyWorkspace({required this.service, required this.onOpen});
 
   @override
   Widget build(BuildContext context) {
@@ -269,7 +279,7 @@ class _EmptyWorkspace extends StatelessWidget {
           Text('No projects open', style: theme.textTheme.titleMedium),
           const SizedBox(height: 8),
           Text(
-            'Open a local repository or clone one of your GitHub\nrepositories. Each project gets its own tab.',
+            'Open a local repository or clone one of your $service\nrepositories. Each project gets its own tab.',
             textAlign: TextAlign.center,
             style: theme.textTheme.bodyMedium?.copyWith(color: theme.colorScheme.onSurfaceVariant),
           ),

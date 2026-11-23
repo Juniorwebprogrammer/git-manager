@@ -94,7 +94,7 @@ class AccountCard extends StatelessWidget {
               ),
               const SizedBox(height: 2),
               Text(
-                '@${account.login}',
+                account.handle,
                 style: theme.textTheme.bodySmall?.copyWith(
                   color: theme.colorScheme.onSurfaceVariant,
                 ),

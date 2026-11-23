@@ -11,6 +11,7 @@ import 'package:git_manager/core/error/app_exception.dart';
 import 'package:git_manager/core/error/app_failure.dart';
 import 'package:git_manager/core/error/result.dart';
 import 'package:git_manager/core/git/git_runner.dart';
+import 'package:git_manager/core/hosting/git_provider.dart';
 import 'package:git_manager/features/repos/data/datasources/git_cli_data_source.dart';
 import 'package:git_manager/features/repos/domain/entities/file_diff.dart';
 import 'package:git_manager/features/repos/domain/entities/git_action.dart';
@@ -77,6 +78,11 @@ class _CliGitRepository implements GitRepository {
   @override
   Future<Result<void>> run(RepoHandle repo, GitAction action) => _wrap(() => cli.run(repo.path, action, identity));
   @override
+  Future<Result<HostedRemote?>> loadHostedRemote(RepoHandle repo) => _wrap(() async {
+        final out = await const GitRunner().tryRun(['remote', 'get-url', 'origin'], workingDirectory: repo.path);
+        return out.ok ? parseHostedRemote(out.stdout) : null;
+      });
+  @override
   Future<Result<({int commits, String author})>> loadRefUpdate(RepoHandle repo, String? from, String to) =>
       _wrap(() => cli.refUpdate(repo.path, from, to));
   @override
@@ -98,10 +104,14 @@ class _CliGitRepository implements GitRepository {
   Future<Result<List<GitCommit>>> loadCommitsForRebase(RepoHandle repo, String base) =>
       _wrap(() => cli.commitsForRebase(repo.path, base));
   @override
-  Future<Result<GitHubRepoInfo>> githubRepoInfo(RepoHandle repo) async =>
-      const Success(GitHubRepoInfo(owner: 'octo', name: 'demo'));
+  Future<Result<HostedRepoInfo>> hostedRepoInfo(RepoHandle repo) async =>
+      Success(HostedRepoInfo(owner: 'octo', name: 'demo', provider: service));
+
+  /// Servicio de las PRs simuladas (GitHub o Azure DevOps).
+  GitProvider service = GitProvider.github;
+
   @override
-  Future<Result<List<PullRequest>>> listPullRequests(RepoHandle repo) async => const Success([
+  Future<Result<List<PullRequest>>> listPullRequests(RepoHandle repo) async => Success([
         PullRequest(
           number: 12,
           title: 'Add a much better login screen with validation',
@@ -112,6 +122,7 @@ class _CliGitRepository implements GitRepository {
           baseRef: 'main',
           url: 'https://github.com/octo/demo/pull/12',
           ci: CiStatus.success,
+          provider: service,
         ),
         PullRequest(
           number: 7,
@@ -124,6 +135,7 @@ class _CliGitRepository implements GitRepository {
           url: 'https://github.com/octo/demo/pull/7',
           draft: true,
           ci: CiStatus.failure,
+          provider: service,
         ),
       ]);
   final prOps = <PullRequestOp>[];
@@ -146,6 +158,7 @@ class _CliGitRepository implements GitRepository {
           commitCount: 1,
           additions: 4,
           changedFiles: 1,
+          provider: service,
         ),
         timeline: [
           PullRequestEvent(author: 'eve', body: 'Please add a test', review: ReviewState.changesRequested, date: DateTime(2026, 11, 19, 10)),
@@ -773,6 +786,66 @@ void main() {
     final log = await tester.runAsync(() => runner.run(['log', '--format=%s', 'main'], workingDirectory: repo));
     expect(log!.trim().split('\n'), ['Improve greeting', 'Initial commit']);
     expect(tester.takeException(), isNull);
+  });
+
+  group('Azure Repos pull requests', () {
+    setUp(() async {
+      git.prOps.clear();
+      git.service = GitProvider.azure;
+      await runner.run(['remote', 'add', 'origin', 'https://dev.azure.com/contoso/Store/_git/demo'],
+          workingDirectory: repo);
+    });
+    tearDown(() => git.service = GitProvider.github);
+
+    testWidgets('list, view and complete a PR with Azure DevOps wording', (tester) async {
+      await pumpWorkspace(tester, const Size(1280, 720));
+      expect(find.text('PULL REQUESTS'), findsOneWidget);
+      expect(find.textContaining('not in the app yet'), findsNothing);
+
+      await tester.tapAt(tester.getCenter(find.textContaining('Add a much better login screen')),
+          buttons: kSecondaryButton);
+      await settle(tester);
+      expect(find.text('Open on Azure DevOps'), findsOneWidget);
+      await tester.sendKeyEvent(LogicalKeyboardKey.escape);
+      await settle(tester);
+
+      await tester.tap(find.textContaining('Add a much better login screen'));
+      await settle(tester);
+      expect(find.byType(PullRequestView), findsOneWidget);
+      expect(find.byTooltip('Open on Azure DevOps'), findsOneWidget);
+
+      await tester.tap(find.widgetWithText(FilledButton, 'Merge'));
+      await settle(tester);
+      expect(find.textContaining('Azure DevOps completes the pull request'), findsOneWidget);
+      expect(find.textContaining('on Azure DevOps after merging'), findsOneWidget);
+      await tester.tap(find.text('Squash and merge'));
+      await settle(tester);
+      await tester.tap(find.widgetWithText(FilledButton, 'Confirm squash and merge'));
+      await settle(tester);
+      final merge = git.prOps.whereType<MergePullRequest>().single;
+      expect((merge.method, merge.deleteBranch), (MergeMethod.squash, true));
+      expect(tester.takeException(), isNull);
+    });
+
+    testWidgets('the PR button and the palette create Azure pull requests', (tester) async {
+      await pumpWorkspace(tester, const Size(1024, 680));
+      await tester.tap(find.byTooltip('Create pull request').first);
+      await settle(tester);
+      expect(find.textContaining('is not on Azure DevOps yet'), findsOneWidget);
+      await tester.tap(find.text('Cancel'));
+      await settle(tester);
+
+      await tester.sendKeyDownEvent(LogicalKeyboardKey.controlLeft);
+      await tester.sendKeyDownEvent(LogicalKeyboardKey.shiftLeft);
+      await tester.sendKeyEvent(LogicalKeyboardKey.keyP);
+      await tester.sendKeyUpEvent(LogicalKeyboardKey.shiftLeft);
+      await tester.sendKeyUpEvent(LogicalKeyboardKey.controlLeft);
+      await settle(tester);
+      await tester.enterText(find.byType(TextField).last, 'pull request');
+      await settle(tester);
+      expect(find.text('Create pull request…'), findsOneWidget);
+      expect(tester.takeException(), isNull);
+    });
   });
 
   group('GitHub pull requests', () {

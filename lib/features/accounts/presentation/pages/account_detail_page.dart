@@ -2,6 +2,8 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:url_launcher/url_launcher.dart';
 
+import '../../../../core/hosting/git_provider.dart';
+
 import '../../../repos/presentation/pages/workspace_page.dart';
 import '../../domain/entities/git_account.dart';
 import '../state/accounts_notifier.dart';
@@ -93,7 +95,7 @@ class AccountDetailPage extends ConsumerWidget {
                 Text(account.nameOrLogin, style: theme.textTheme.headlineSmall),
                 const SizedBox(height: 4),
                 Text(
-                  '@${account.login}',
+                  account.handle,
                   style: theme.textTheme.bodyLarge?.copyWith(
                     color: theme.colorScheme.onSurfaceVariant,
                   ),
@@ -108,8 +110,19 @@ class AccountDetailPage extends ConsumerWidget {
                         subtitle: Text(account.email.isEmpty ? '—' : account.email),
                       ),
                       ListTile(
+                        leading: const Icon(Icons.hub_outlined),
+                        title: const Text('Service'),
+                        subtitle: Text(account.provider.label),
+                      ),
+                      if (account.organizations.isNotEmpty)
+                        ListTile(
+                          leading: const Icon(Icons.corporate_fare),
+                          title: const Text('Organizations'),
+                          subtitle: Text(account.organizations.join(', ')),
+                        ),
+                      ListTile(
                         leading: const Icon(Icons.open_in_new),
-                        title: const Text('GitHub profile'),
+                        title: Text(account.provider == GitProvider.azure ? 'Azure DevOps' : 'GitHub profile'),
                         subtitle: Text(account.profileUrl),
                         onTap: account.profileUrl.isEmpty
                             ? null

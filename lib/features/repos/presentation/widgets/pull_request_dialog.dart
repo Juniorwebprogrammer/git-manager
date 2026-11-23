@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../../core/di/providers.dart';
 import '../../../../core/error/result.dart';
+import '../../../../core/hosting/git_provider.dart';
 import '../../domain/entities/git_action.dart';
 import '../../domain/entities/pull_request.dart';
 import '../../domain/entities/repo_snapshot.dart';
@@ -40,7 +41,7 @@ class _CreatePullRequestDialog extends ConsumerStatefulWidget {
 class _CreatePullRequestDialogState extends ConsumerState<_CreatePullRequestDialog> {
   final _title = TextEditingController();
   final _body = TextEditingController();
-  GitHubRepoInfo? _info;
+  HostedRepoInfo? _info;
   String? _loadError;
   String? _head;
   String? _base;
@@ -65,7 +66,7 @@ class _CreatePullRequestDialogState extends ConsumerState<_CreatePullRequestDial
   }
 
   Future<void> _loadInfo() async {
-    final result = await ref.read(gitRepositoryProvider).githubRepoInfo(widget.repo);
+    final result = await ref.read(gitRepositoryProvider).hostedRepoInfo(widget.repo);
     if (!mounted) return;
     setState(() {
       switch (result) {
@@ -126,6 +127,8 @@ class _CreatePullRequestDialogState extends ConsumerState<_CreatePullRequestDial
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final snapshot = ref.watch(repoNotifierProvider(widget.repo).select((s) => s.snapshot));
+    final service =
+        (_info?.provider ?? ref.watch(hostedRemoteProvider(widget.repo)).value?.provider ?? GitProvider.github).label;
     final locals = snapshot?.localBranches ?? const <GitRef>[];
     final headRef = locals.where((b) => b.name == _head).firstOrNull;
     final remote = snapshot?.remotes.contains('origin') ?? false ? 'origin' : snapshot?.remotes.firstOrNull;
@@ -166,7 +169,7 @@ class _CreatePullRequestDialogState extends ConsumerState<_CreatePullRequestDial
                                 initialValue: _base != null && bases.contains(_base) ? _base : null,
                                 isExpanded: true,
                                 decoration: const InputDecoration(labelText: 'Base (merge into)'),
-                                hint: Text(bases.isEmpty ? 'No other branch on GitHub' : 'Choose a branch'),
+                                hint: Text(bases.isEmpty ? 'No other branch on $service' : 'Choose a branch'),
                                 items: [for (final b in bases) DropdownMenuItem(value: b, child: Text(b))],
                                 onChanged: (v) => setState(() => _base = v),
                               ),
@@ -217,7 +220,7 @@ class _CreatePullRequestDialogState extends ConsumerState<_CreatePullRequestDial
                             value: _pushFirst,
                             onChanged: (v) => setState(() => _pushFirst = v ?? true),
                             title: Text(headRef?.upstream == null
-                                ? '"$_head" is not on GitHub yet — push it first'
+                                ? '"$_head" is not on $service yet — push it first'
                                 : 'Push ${headRef!.ahead} new commit${headRef.ahead == 1 ? '' : 's'} first'),
                             dense: true,
                             contentPadding: EdgeInsets.zero,

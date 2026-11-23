@@ -88,10 +88,10 @@ class GitHubRemoteDataSource {
     return repos;
   }
 
-  Future<GitHubRepoInfo> fetchRepoInfo(String token, String owner, String name) async {
+  Future<HostedRepoInfo> fetchRepoInfo(String token, String owner, String name) async {
     final response = await _get('/repos/$owner/$name', token);
     final json = jsonDecode(response.body) as Map<String, dynamic>;
-    return GitHubRepoInfo(
+    return HostedRepoInfo(
       owner: owner,
       name: name,
       defaultBranch: json['default_branch'] as String? ?? 'main',

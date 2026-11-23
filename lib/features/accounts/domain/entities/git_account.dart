@@ -1,5 +1,7 @@
-/// Cuenta de GitHub gestionada por la app. No contiene el token: eso
-/// pertenece exclusivamente a la capa de datos.
+import '../../../../core/hosting/git_provider.dart';
+
+/// Cuenta (de GitHub o Azure DevOps) gestionada por la app. No contiene el
+/// token: eso pertenece exclusivamente a la capa de datos.
 class GitAccount {
   final String id;
   final String login;
@@ -8,6 +10,10 @@ class GitAccount {
   final String avatarUrl;
   final String profileUrl;
   final bool isActive;
+  final GitProvider provider;
+
+  /// Organizaciones de Azure DevOps (vacío en GitHub).
+  final List<String> organizations;
 
   const GitAccount({
     required this.id,
@@ -17,9 +23,18 @@ class GitAccount {
     required this.avatarUrl,
     required this.profileUrl,
     this.isActive = false,
+    this.provider = GitProvider.github,
+    this.organizations = const [],
   });
 
   String get nameOrLogin => displayName.isNotEmpty ? displayName : login;
+
+  /// Cómo se muestra la cuenta bajo su nombre: `@login` en GitHub; en
+  /// Azure DevOps, el email y las organizaciones.
+  String get handle => switch (provider) {
+        GitProvider.github => '@$login',
+        GitProvider.azure => organizations.isEmpty ? login : '$login · ${organizations.join(', ')}',
+      };
 
   GitAccount copyWith({
     String? displayName,
@@ -35,6 +50,8 @@ class GitAccount {
       avatarUrl: avatarUrl ?? this.avatarUrl,
       profileUrl: profileUrl,
       isActive: isActive ?? this.isActive,
+      provider: provider,
+      organizations: organizations,
     );
   }
 

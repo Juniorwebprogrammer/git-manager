@@ -35,6 +35,11 @@ class GitCommandFailure extends AppFailure {
   const GitCommandFailure(super.message);
 }
 
+/// Falta algo para dar de alta la cuenta (p. ej. la organización de Azure).
+class AccountSetupFailure extends AppFailure {
+  const AccountSetupFailure(super.message);
+}
+
 class UnknownFailure extends AppFailure {
   const UnknownFailure([super.message = 'An unexpected error occurred.']);
 }

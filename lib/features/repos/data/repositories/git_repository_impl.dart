@@ -2,7 +2,9 @@ import '../../../../core/error/app_exception.dart';
 import '../../../../core/error/app_failure.dart';
 import '../../../../core/error/result.dart';
 import '../../../../core/git/git_runner.dart';
+import '../../../../core/hosting/git_provider.dart';
 import '../../../accounts/data/datasources/account_local_data_source.dart';
+import '../../../accounts/data/datasources/azure_devops_remote_data_source.dart';
 import '../../../accounts/data/datasources/github_remote_data_source.dart';
 import '../../domain/entities/file_diff.dart';
 import '../../domain/entities/git_action.dart';
@@ -21,14 +23,17 @@ class GitRepositoryImpl implements GitRepository {
   final GitCliDataSource _cli;
   final AccountLocalDataSource _accounts;
   final GitHubRemoteDataSource _githubApi;
+  final AzureDevOpsRemoteDataSource? _azureApi;
 
   GitRepositoryImpl({
     required GitCliDataSource cli,
     required AccountLocalDataSource accounts,
     required GitHubRemoteDataSource github,
+    AzureDevOpsRemoteDataSource? azure,
   })  : _cli = cli,
         _accounts = accounts,
-        _githubApi = github;
+        _githubApi = github,
+        _azureApi = azure;
 
   /// El token vive solo aquí, en la capa de datos.
   Future<GitIdentity> _identity(String accountId) async {
@@ -40,6 +45,8 @@ class GitRepositoryImpl implements GitRepository {
       token: account.token,
       name: account.displayName.isNotEmpty ? account.displayName : account.login,
       email: account.email,
+      provider: account.provider,
+      organizations: account.organizations,
     );
   }
 
@@ -84,8 +91,34 @@ class GitRepositoryImpl implements GitRepository {
 
   @override
   Future<Result<void>> run(RepoHandle repo, GitAction action) => _guard(() async {
-        await _cli.run(repo.path, action, await _identity(repo.accountId));
+        final identity = await _identity(repo.accountId);
+        try {
+          await _cli.run(repo.path, action, identity);
+        } on GitCommandException catch (e) {
+          if (!action.isNetwork) rethrow;
+          // Repo de otro servicio que la cuenta de la pestaña: explicarlo.
+          final remote = await _remoteOf(repo.path);
+          if (remote == null || remote.provider == identity.provider) rethrow;
+          throw GitCommandException(
+            'This repository is on ${remote.provider.label}, but this tab uses the '
+            '${identity.provider.label} account "${identity.login}", so its token is not sent there.\n\n'
+            'Open the repository from a ${remote.provider.label} account (back to accounts → '
+            'that account → open the folder).\n\nGit said: ${e.message}',
+          );
+        }
       });
+
+  Future<HostedRemote?> _remoteOf(String path) async {
+    try {
+      return parseHostedRemote(await _cli.remoteUrl(path));
+    } on GitCommandException {
+      return null; // sin remotos
+    }
+  }
+
+  @override
+  Future<Result<HostedRemote?>> loadHostedRemote(RepoHandle repo) =>
+      _guard(() => _remoteOf(repo.path));
 
   @override
   Future<Result<({int commits, String author})>> loadRefUpdate(RepoHandle repo, String? from, String to) =>
@@ -116,40 +149,68 @@ class GitRepositoryImpl implements GitRepository {
   Future<Result<List<GitCommit>>> loadCommitsForRebase(RepoHandle repo, String base) =>
       _guard(() => _cli.commitsForRebase(repo.path, base));
 
-  Future<({GitIdentity identity, GitHubRepoInfo info})> _github(RepoHandle repo) async {
+  /// Remoto del repo + cuenta de la pestaña, comprobando que son del mismo
+  /// servicio (el token de GitHub no sirve en Azure DevOps, ni al revés).
+  Future<({GitIdentity identity, HostedRemote remote})> _hosted(RepoHandle repo) async {
     final url = await _cli.remoteUrl(repo.path);
-    final parsed = parseGitHubRemote(url);
-    if (parsed == null) {
-      throw GitCommandException('The remote "$url" is not a GitHub repository.');
+    final remote = parseHostedRemote(url);
+    if (remote == null) {
+      throw GitCommandException('The remote "$url" is not a GitHub or Azure DevOps repository.');
     }
     final identity = await _identity(repo.accountId);
-    final info = await _githubApi.fetchRepoInfo(identity.token, parsed.owner, parsed.name);
-    return (identity: identity, info: info);
+    if (remote.provider != identity.provider) {
+      throw GitCommandException(
+        'This repository is on ${remote.provider.label}, but this tab uses the '
+        '${identity.provider.label} account "${identity.login}".\n\n'
+        'Open the repository from a ${remote.provider.label} account to work with its pull requests.',
+      );
+    }
+    return (identity: identity, remote: remote);
   }
 
+  AzureDevOpsRemoteDataSource get _azure =>
+      _azureApi ?? (throw const ServerException('Azure DevOps support is not available.'));
+
   @override
-  Future<Result<GitHubRepoInfo>> githubRepoInfo(RepoHandle repo) => _guard(() async => (await _github(repo)).info);
+  Future<Result<HostedRepoInfo>> hostedRepoInfo(RepoHandle repo) => _guard(() async {
+        final h = await _hosted(repo);
+        return h.remote.provider == GitProvider.azure
+            ? _azure.fetchRepoInfo(h.identity.token, h.remote)
+            : _githubApi.fetchRepoInfo(h.identity.token, h.remote.owner, h.remote.name);
+      });
 
   @override
   Future<Result<List<PullRequest>>> listPullRequests(RepoHandle repo) => _guard(() async {
-        final gh = await _github(repo);
-        final token = gh.identity.token;
-        final pulls = await _githubApi.fetchOpenPullRequests(token, gh.info.owner, gh.info.name);
+        final h = await _hosted(repo);
+        final token = h.identity.token;
+        if (h.remote.provider == GitProvider.azure) return _azure.fetchOpenPullRequests(token, h.remote);
+        final (owner, name) = (h.remote.owner, h.remote.name);
+        final pulls = await _githubApi.fetchOpenPullRequests(token, owner, name);
         return Future.wait(pulls.map((pr) async => pr.copyWith(
-              ci: await _githubApi.fetchCiStatus(token, gh.info.owner, gh.info.name, pr.headSha),
+              ci: await _githubApi.fetchCiStatus(token, owner, name, pr.headSha),
             )));
       });
 
   @override
   Future<Result<PullRequestBundle>> loadPullRequest(RepoHandle repo, int number) => _guard(() async {
-        final gh = await _github(repo);
-        return _githubApi.fetchPullRequestBundle(gh.identity.token, gh.info.owner, gh.info.name, number);
+        final h = await _hosted(repo);
+        if (h.remote.provider == GitProvider.azure) {
+          // El diff se calcula aquí con git: se traen los commits de la PR.
+          return _azure.fetchPullRequestBundle(h.identity.token, h.remote, number, localFiles: (base, head) async {
+            await _cli.ensureCommits(repo.path, h.identity, [base, head], ['refs/pull/$number/merge']);
+            return _cli.pullRequestFiles(repo.path, base, head);
+          });
+        }
+        return _githubApi.fetchPullRequestBundle(h.identity.token, h.remote.owner, h.remote.name, number);
       });
 
   @override
   Future<Result<void>> pullRequestAction(RepoHandle repo, int number, PullRequestOp op) => _guard(() async {
-        final gh = await _github(repo);
-        await _githubApi.pullRequestAction(gh.identity.token, gh.info.owner, gh.info.name, number, op);
+        final h = await _hosted(repo);
+        if (h.remote.provider == GitProvider.azure) {
+          return _azure.pullRequestAction(h.identity.token, h.remote, number, op);
+        }
+        await _githubApi.pullRequestAction(h.identity.token, h.remote.owner, h.remote.name, number, op);
       });
 
   @override
@@ -162,11 +223,15 @@ class GitRepositoryImpl implements GitRepository {
     bool draft = false,
   }) =>
       _guard(() async {
-        final gh = await _github(repo);
+        final h = await _hosted(repo);
+        if (h.remote.provider == GitProvider.azure) {
+          return _azure.createPullRequest(h.identity.token, h.remote,
+              title: title, head: head, base: base, body: body, draft: draft);
+        }
         return _githubApi.createPullRequest(
-          gh.identity.token,
-          gh.info.owner,
-          gh.info.name,
+          h.identity.token,
+          h.remote.owner,
+          h.remote.name,
           title: title,
           head: head,
           base: base,
@@ -178,6 +243,10 @@ class GitRepositoryImpl implements GitRepository {
   @override
   Future<Result<List<RemoteRepository>>> listRemoteRepositories(String accountId) => _guard(() async {
         final identity = await _identity(accountId);
+        if (identity.provider == GitProvider.azure) {
+          final lists = await Future.wait(identity.organizations.map((o) => _azure.fetchRepositories(identity.token, o)));
+          return [for (final l in lists) ...l];
+        }
         return _githubApi.fetchRepositories(identity.token);
       });
 

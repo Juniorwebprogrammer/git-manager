@@ -5,6 +5,7 @@ import 'package:url_launcher/url_launcher.dart';
 
 import '../../../../core/di/providers.dart';
 import '../../../../core/error/result.dart';
+import '../../../../core/hosting/git_provider.dart';
 import '../../data/parsers/git_parsers.dart';
 import '../../domain/entities/file_diff.dart';
 import '../../domain/entities/git_action.dart';
@@ -257,7 +258,7 @@ class _Header extends ConsumerWidget {
                 child: SizedBox(width: 14, height: 14, child: CircularProgressIndicator(strokeWidth: 2)),
               ),
             IconButton(
-              tooltip: 'Open on GitHub',
+              tooltip: 'Open on ${pr.provider.label}',
               onPressed: () => launchUrl(Uri.parse(pr.url)),
               icon: const Icon(Icons.open_in_new, size: 20),
             ),
@@ -303,7 +304,7 @@ class _Header extends ConsumerWidget {
                     label: const Text('Review'),
                   ),
                   Tooltip(
-                    message: merge.canMerge ? 'Merge this pull request on GitHub' : merge.text,
+                    message: merge.canMerge ? 'Merge this pull request on ${pr.provider.label}' : merge.text,
                     child: FilledButton.icon(
                       style: FilledButton.styleFrom(backgroundColor: _green, foregroundColor: Colors.white),
                       onPressed: merge.canMerge ? () => _merge(context, ref, pr) : null,
@@ -937,7 +938,10 @@ class _FilesTabState extends ConsumerState<_FilesTab> {
     final canComment = widget.bundle.detail.isOpen;
     final patch = file.patch == null
         ? Center(
-            child: Text('GitHub does not provide a text diff for this file (binary or too large).',
+            child: Text(
+                widget.bundle.detail.provider == GitProvider.azure
+                    ? 'No text diff for this file (binary, too large, or its commits could not be fetched).'
+                    : 'GitHub does not provide a text diff for this file (binary or too large).',
                 style: TextStyle(color: theme.colorScheme.onSurfaceVariant)),
           )
         : Column(
@@ -1269,13 +1273,16 @@ class _MergeDialogState extends State<_MergeDialog> {
                 CheckboxListTile(
                   value: _deleteBranch,
                   onChanged: (v) => setState(() => _deleteBranch = v ?? false),
-                  title: Text('Delete the branch "${pr.headRef}" on GitHub after merging'),
+                  title: Text('Delete the branch "${pr.headRef}" on ${pr.provider.label} after merging'),
                   dense: true,
                   contentPadding: EdgeInsets.zero,
                   controlAffinity: ListTileControlAffinity.leading,
                 ),
               Text(
-                'The merge happens on GitHub; your local branches are updated with a fetch afterwards.',
+                pr.provider == GitProvider.azure
+                    ? 'Azure DevOps completes the pull request (branch policies must pass); '
+                        'your local branches are updated with a fetch afterwards.'
+                    : 'The merge happens on GitHub; your local branches are updated with a fetch afterwards.',
                 style: theme.textTheme.bodySmall?.copyWith(color: theme.colorScheme.onSurfaceVariant),
               ),
             ],

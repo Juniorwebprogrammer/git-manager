@@ -2,6 +2,7 @@ import 'dart:convert';
 import 'dart:io';
 
 import '../error/app_exception.dart';
+import '../hosting/git_provider.dart';
 
 /// Identidad con la que se ejecuta git para una cuenta concreta, **sin**
 /// tocar la configuración global del sistema: el token viaja como cabecera
@@ -13,28 +14,45 @@ class GitIdentity {
   final String name;
   final String email;
 
+  /// Servicio de la cuenta: decide a qué hosts se manda el token.
+  final GitProvider provider;
+
+  /// Organizaciones de Azure DevOps (para las URL `{org}.visualstudio.com`).
+  final List<String> organizations;
+
   const GitIdentity({
     required this.login,
     required this.token,
     required this.name,
     required this.email,
+    this.provider = GitProvider.github,
+    this.organizations = const [],
   });
 
   Map<String, String> toEnvironment() {
-    final basic = base64.encode(utf8.encode('$login:$token'));
+    // Azure DevOps acepta cualquier usuario con el PAT como contraseña;
+    // el habitual es vacío (":PAT").
+    final user = provider == GitProvider.azure ? '' : login;
+    final basic = base64.encode(utf8.encode('$user:$token'));
+    final config = <(String, String)>[];
+    for (final host in provider.httpsHosts(organizations)) {
+      // Vacía la lista de credential helpers de ese host, así no se cuela el
+      // token de otra cuenta guardado en ~/.git-credentials…
+      config.add(('credential.https://$host.helper', ''));
+      // …y manda el de esta cuenta como cabecera.
+      config.add(('http.https://$host/.extraheader', 'Authorization: Basic $basic'));
+    }
     return {
       'GIT_TERMINAL_PROMPT': '0',
       'GIT_AUTHOR_NAME': name,
       'GIT_AUTHOR_EMAIL': email,
       'GIT_COMMITTER_NAME': name,
       'GIT_COMMITTER_EMAIL': email,
-      'GIT_CONFIG_COUNT': '2',
-      // Vacía la lista de credential helpers para github.com, así no se
-      // cuela el token de otra cuenta guardado en ~/.git-credentials.
-      'GIT_CONFIG_KEY_0': 'credential.https://github.com.helper',
-      'GIT_CONFIG_VALUE_0': '',
-      'GIT_CONFIG_KEY_1': 'http.https://github.com/.extraheader',
-      'GIT_CONFIG_VALUE_1': 'Authorization: Basic $basic',
+      'GIT_CONFIG_COUNT': '${config.length}',
+      for (var i = 0; i < config.length; i++) ...{
+        'GIT_CONFIG_KEY_$i': config[i].$1,
+        'GIT_CONFIG_VALUE_$i': config[i].$2,
+      },
     };
   }
 }

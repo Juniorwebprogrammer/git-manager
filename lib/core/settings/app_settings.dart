@@ -21,6 +21,12 @@ class AppSettings {
   /// Cada cuántos minutos hacer fetch en segundo plano (0 = nunca).
   final int autoFetchMinutes;
 
+  /// Buscar versiones nuevas de la app al arrancar y cada pocas horas.
+  final bool checkForUpdates;
+
+  /// Versión que el usuario decidió omitir ('' = ninguna).
+  final String skippedVersion;
+
   const AppSettings({
     this.themeMode = ThemeMode.system,
     this.diffFontSize = 12.5,
@@ -28,6 +34,8 @@ class AppSettings {
     this.ignoreWhitespace = false,
     this.notifications = true,
     this.autoFetchMinutes = 5,
+    this.checkForUpdates = true,
+    this.skippedVersion = '',
   });
 
   static const autoFetchChoices = [0, 1, 2, 5, 10, 15];
@@ -42,6 +50,8 @@ class AppSettings {
     bool? ignoreWhitespace,
     bool? notifications,
     int? autoFetchMinutes,
+    bool? checkForUpdates,
+    String? skippedVersion,
   }) =>
       AppSettings(
         themeMode: themeMode ?? this.themeMode,
@@ -50,6 +60,8 @@ class AppSettings {
         ignoreWhitespace: ignoreWhitespace ?? this.ignoreWhitespace,
         notifications: notifications ?? this.notifications,
         autoFetchMinutes: autoFetchMinutes ?? this.autoFetchMinutes,
+        checkForUpdates: checkForUpdates ?? this.checkForUpdates,
+        skippedVersion: skippedVersion ?? this.skippedVersion,
       );
 
   Map<String, Object> toMap() => {
@@ -59,6 +71,8 @@ class AppSettings {
         'ignoreWhitespace': ignoreWhitespace,
         'notifications': notifications,
         'autoFetchMinutes': autoFetchMinutes,
+        'checkForUpdates': checkForUpdates,
+        'skippedVersion': skippedVersion,
       };
 
   factory AppSettings.fromMap(Map<String, Object?> map) {
@@ -70,6 +84,8 @@ class AppSettings {
       ignoreWhitespace: map['ignoreWhitespace'] as bool?,
       notifications: map['notifications'] as bool?,
       autoFetchMinutes: (map['autoFetchMinutes'] as num?)?.toInt(),
+      checkForUpdates: map['checkForUpdates'] as bool?,
+      skippedVersion: map['skippedVersion'] as String?,
     );
   }
 }

@@ -100,4 +100,9 @@ echo "==> Empaquetando .deb"
 mkdir -p "$ROOT_DIR/build/deb"
 dpkg-deb --build --root-owner-group "$STAGE_DIR" "$DEB_FILE"
 
+# El actualizador de la app comprueba el paquete con esta suma: hay que
+# subir los dos ficheros a la release.
+(cd "$(dirname "$DEB_FILE")" && sha256sum "$(basename "$DEB_FILE")" > "$(basename "$DEB_FILE").sha256")
+
 echo "==> Listo: $DEB_FILE"
+echo "          $DEB_FILE.sha256"
